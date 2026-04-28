@@ -1,0 +1,15 @@
+{
+  "name": "sector-rotation",
+  "version": "1.0.0",
+  "description": "Daily sector rotation scanner - ranks SPDR sector ETFs by relative strength vs SPY, tracks biotech-specific rotation signals, and pushes alerts via Pushover.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "scan": "node sectorRotation.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {},
+  "license": "MIT"
+}

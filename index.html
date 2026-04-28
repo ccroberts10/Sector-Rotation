@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<meta name="theme-color" content="#0a0a0a" />
+<title>Sector Rotation — SIGNAL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,0..100&family=JetBrains+Mono:wght@300;400;500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --bg-elev: #131313;
+    --bg-elev-2: #1a1a1a;
+    --line: #242424;
+    --line-soft: #1c1c1c;
+    --text: #f4f1ea;
+    --text-dim: #a09b91;
+    --text-faint: #5f5b53;
+    --accent: #d4a574;          /* warm amber, like aged paper highlight */
+    --accent-soft: #d4a57422;
+    --green: #6fa86c;
+    --red: #c97064;
+    --amber: #d4a574;
+    --neutral: #7d8a9c;
+    --serif: 'Fraunces', 'Iowan Old Style', Georgia, serif;
+    --sans: 'Inter', -apple-system, system-ui, sans-serif;
+    --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    line-height: 1.5;
+    overflow-x: hidden;
+  }
+
+  /* Subtle film grain overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 100;
+    opacity: 0.025;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* === Header === */
+  header {
+    border-bottom: 1px solid var(--line);
+    padding: 22px 32px 18px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 24px;
+    background: linear-gradient(180deg, #0c0c0c 0%, var(--bg) 100%);
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    backdrop-filter: blur(8px);
+  }
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+  }
+  .brand-mark {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-style: italic;
+    font-size: 28px;
+    letter-spacing: -0.02em;
+    color: var(--text);
+    line-height: 1;
+  }
+  .brand-mark em {
+    font-style: italic;
+    color: var(--accent);
+  }
+  .brand-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    border-left: 1px solid var(--line);
+    padding-left: 14px;
+  }
+  .header-meta {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .status-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    margin-right: 7px;
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  .scan-btn {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 8px 16px;
+    cursor: pointer;
+    transition: all 0.18s ease;
+  }
+  .scan-btn:hover:not(:disabled) {
+    background: var(--accent);
+    color: var(--bg);
+  }
+  .scan-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* === Main grid === */
+  main {
+    max-width: 1380px;
+    margin: 0 auto;
+    padding: 40px 32px 80px;
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 32px;
+  }
+  @media (max-width: 920px) {
+    main { grid-template-columns: 1fr; padding: 24px 18px 60px; gap: 24px; }
+    header { padding: 18px 18px 14px; flex-wrap: wrap; }
+    .header-meta { font-size: 10px; gap: 12px; }
+  }
+
+  /* === Headline / AI Recap === */
+  .headline {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--accent);
+    padding-top: 32px;
+    margin-bottom: 8px;
+  }
+  .headline-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 18px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .headline-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--line);
+  }
+  .recap {
+    font-family: var(--serif);
+    font-weight: 350;
+    font-size: clamp(22px, 2.4vw, 30px);
+    line-height: 1.35;
+    letter-spacing: -0.015em;
+    color: var(--text);
+    max-width: 980px;
+  }
+  .recap-empty {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-faint);
+    font-style: normal;
+  }
+
+  /* === Card primitive === */
+  .card {
+    background: var(--bg-elev);
+    border: 1px solid var(--line);
+    padding: 26px 28px;
+  }
+  .card-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 22px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .card-title {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-style: italic;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+    color: var(--text);
+  }
+  .card-sub {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+
+  /* === Regime card === */
+  .regime-card {
+    grid-column: 1 / 2;
+    display: flex;
+    flex-direction: column;
+  }
+  .regime-classification {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+  .regime-label {
+    font-family: var(--serif);
+    font-weight: 300;
+    font-size: 56px;
+    letter-spacing: -0.04em;
+    line-height: 0.95;
+  }
+  .regime-label.risk-on { color: var(--green); }
+  .regime-label.risk-off { color: var(--red); }
+  .regime-label.mixed { color: var(--amber); }
+  .regime-label.unknown { color: var(--text-dim); }
+  .regime-context {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    line-height: 1.6;
+  }
+  .regime-context strong {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  /* Sizing buckets */
+  .buckets {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .bucket {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 18px;
+    align-items: start;
+    padding: 12px 0;
+    border-top: 1px dashed var(--line-soft);
+  }
+  .bucket:first-child { border-top: none; padding-top: 0; }
+  .bucket-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+  .bucket-mult {
+    display: block;
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 18px;
+    margin-top: 2px;
+  }
+  .bucket.up .bucket-mult { color: var(--green); }
+  .bucket.normal .bucket-mult { color: var(--text-dim); }
+  .bucket.trim .bucket-mult { color: var(--amber); }
+  .bucket.skip .bucket-mult { color: var(--red); }
+  .bucket-tickers {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--text);
+    word-spacing: 4px;
+  }
+  .bucket-tickers .tk {
+    display: inline-block;
+    padding: 1px 6px;
+    margin: 1px 2px;
+    background: var(--bg-elev-2);
+    border: 1px solid var(--line);
+    color: var(--text);
+  }
+
+  /* Actions list */
+  .actions {
+    margin-top: 28px;
+    padding-top: 22px;
+    border-top: 1px solid var(--line-soft);
+  }
+  .actions-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 14px;
+  }
+  .action-item {
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px dashed var(--line-soft);
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text);
+  }
+  .action-item:last-child { border-bottom: none; }
+  .action-num {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 22px;
+    color: var(--accent);
+    line-height: 1;
+  }
+  .action-text strong {
+    font-weight: 500;
+    color: var(--text);
+    margin-right: 4px;
+  }
+
+  /* === Right column: rankings + biotech === */
+  .right-col {
+    grid-column: 2 / 3;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  @media (max-width: 920px) {
+    .regime-card, .right-col { grid-column: 1 / -1; }
+  }
+
+  /* Biotech read */
+  .biotech-card {
+    padding: 22px 26px;
+  }
+  .biotech-signal {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 32px;
+    letter-spacing: -0.02em;
+    margin: 8px 0 18px;
+    line-height: 1.05;
+  }
+  .biotech-signal.rotation-in { color: var(--green); }
+  .biotech-signal.early-positive { color: var(--amber); }
+  .biotech-signal.still-out { color: var(--red); }
+  .biotech-signal.neutral, .biotech-signal.unknown { color: var(--text-dim); }
+  .ratio-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px 24px;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .ratio-item .label {
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 9px;
+    display: block;
+    margin-bottom: 4px;
+  }
+  .ratio-item .value {
+    font-size: 16px;
+    font-weight: 500;
+  }
+  .ratio-item .value.pos { color: var(--green); }
+  .ratio-item .value.neg { color: var(--red); }
+
+  /* Rankings table */
+  .rankings-card {
+    padding: 22px 0 6px;
+  }
+  .rankings-card .card-header {
+    padding: 0 26px 14px;
+  }
+  .rank-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+  .rank-table th {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    text-align: right;
+    padding: 6px 12px;
+    font-weight: 500;
+    border-bottom: 1px solid var(--line);
+  }
+  .rank-table th:first-child, .rank-table th:nth-child(2) { text-align: left; }
+  .rank-table td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--line-soft);
+    text-align: right;
+    color: var(--text);
+  }
+  .rank-table td:first-child {
+    text-align: left;
+    color: var(--text-faint);
+    font-size: 10px;
+    width: 30px;
+    padding-left: 26px;
+  }
+  .rank-table td.tk-cell {
+    text-align: left;
+    color: var(--text);
+    font-weight: 500;
+    letter-spacing: 0.04em;
+  }
+  .rank-table tr.top-rank td.tk-cell { color: var(--green); }
+  .rank-table tr.bot-rank td.tk-cell { color: var(--red); }
+  .rank-table td:last-child { padding-right: 26px; }
+  .rank-table tr:last-child td { border-bottom: none; }
+  .num-pos { color: var(--green); }
+  .num-neg { color: var(--red); }
+
+  /* Shifts */
+  .shifts-card {
+    padding: 22px 26px;
+  }
+  .shift-row {
+    display: grid;
+    grid-template-columns: 24px 60px 1fr;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px dashed var(--line-soft);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .shift-row:last-child { border-bottom: none; }
+  .shift-arrow {
+    font-family: var(--serif);
+    font-size: 18px;
+    line-height: 1;
+  }
+  .shift-arrow.up { color: var(--green); }
+  .shift-arrow.down { color: var(--red); }
+  .shift-ticker {
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: 0.04em;
+  }
+  .shift-detail {
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+  .shift-empty {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-faint);
+    text-align: center;
+    padding: 16px 0;
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--bg-elev);
+    border: 1px solid var(--accent);
+    color: var(--text);
+    padding: 12px 22px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    opacity: 0;
+    transition: all 0.3s ease;
+    z-index: 200;
+  }
+  .toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* Loading skeleton */
+  .skeleton {
+    color: transparent !important;
+    background: linear-gradient(90deg, var(--bg-elev-2) 0%, var(--line) 50%, var(--bg-elev-2) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+    border-radius: 1px;
+  }
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  /* Empty state for first run */
+  .empty-state {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 80px 20px;
+    border: 1px dashed var(--line);
+  }
+  .empty-state h2 {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 300;
+    font-size: 32px;
+    color: var(--text-dim);
+    margin: 0 0 12px;
+  }
+  .empty-state p {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-faint);
+    letter-spacing: 0.06em;
+  }
+  .empty-state .scan-btn {
+    margin-top: 24px;
+    padding: 12px 24px;
+    font-size: 12px;
+  }
+
+  /* Footer */
+  footer {
+    border-top: 1px solid var(--line-soft);
+    margin-top: 60px;
+    padding: 24px 32px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-faint);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  footer span em {
+    font-style: italic;
+    color: var(--text-dim);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-mark">Sector <em>Rotation</em></div>
+    <div class="brand-tag">SIGNAL · v1</div>
+  </div>
+  <div class="header-meta">
+    <span><span class="status-dot"></span><span id="status-text">live</span></span>
+    <span id="last-run">—</span>
+    <button class="scan-btn" id="scan-btn">Run Scan</button>
+  </div>
+</header>
+
+<main id="main-content">
+  <!-- Populated by JS -->
+</main>
+
+<footer>
+  <span>Composite RS · 1w · 1mo · 3mo · weighted <em>0.2 / 0.5 / 0.3</em></span>
+  <span>Daily · 4:15pm ET · weekdays</span>
+</footer>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  const $ = (s) => document.querySelector(s);
+  const toast = (msg) => {
+    const t = $('#toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 3200);
+  };
+
+  function fmtPct(n) {
+    if (n === null || n === undefined) return '—';
+    return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
+  }
+  function fmtNum(n) {
+    if (n === null || n === undefined) return '—';
+    return (n >= 0 ? '+' : '') + n.toFixed(2);
+  }
+  function pctClass(n) {
+    if (n === null || n === undefined) return '';
+    return n > 0 ? 'num-pos' : (n < 0 ? 'num-neg' : '');
+  }
+  function fmtAge(iso) {
+    if (!iso) return 'never';
+    const then = new Date(iso);
+    const diffMin = Math.floor((Date.now() - then.getTime()) / 60000);
+    if (diffMin < 1) return 'just now';
+    if (diffMin < 60) return diffMin + 'm ago';
+    if (diffMin < 1440) return Math.floor(diffMin / 60) + 'h ago';
+    return Math.floor(diffMin / 1440) + 'd ago';
+  }
+
+  function renderEmpty() {
+    $('#main-content').innerHTML = `
+      <div class="empty-state">
+        <h2>No data yet</h2>
+        <p>Trigger your first scan to populate the dashboard.</p>
+        <button class="scan-btn" onclick="runScan()">Run First Scan</button>
+      </div>
+    `;
+  }
+
+  function render(data) {
+    if (!data || !data.rows || data.rows.length === 0) {
+      renderEmpty();
+      return;
+    }
+
+    const {
+      recap = '',
+      regime = 'UNKNOWN',
+      buckets = { up: [], normal: [], trim: [], skip: [] },
+      actions = [],
+      biotechSignal = 'UNKNOWN',
+      biotechRatios = {},
+      rows = [],
+      shifts = [],
+      timestamp,
+    } = data;
+
+    const top3 = rows.slice(0, 3).map(r => r.ticker);
+    const bot3 = rows.slice(-3).map(r => r.ticker);
+
+    const regimeClass = regime.toLowerCase().replace(/[^a-z]/g, '-');
+    const biotechClass = biotechSignal.toLowerCase().replace(/[^a-z]/g, '-');
+
+    const bucketHTML = (key, label, mult, list) => {
+      if (!list || list.length === 0) return '';
+      return `
+        <div class="bucket ${key}">
+          <div class="bucket-label">
+            ${label}
+            <span class="bucket-mult">${mult}</span>
+          </div>
+          <div class="bucket-tickers">
+            ${list.map(t => `<span class="tk">${t}</span>`).join('')}
+          </div>
+        </div>
+      `;
+    };
+
+    const actionsHTML = actions.length ? `
+      <div class="actions">
+        <div class="actions-title">Actions</div>
+        ${actions.map((a, i) => {
+          const m = a.match(/^([A-Z][A-Z\s]+):\s*(.+)$/);
+          const head = m ? m[1] : '';
+          const body = m ? m[2] : a;
+          return `
+            <div class="action-item">
+              <div class="action-num">${String(i + 1).padStart(2, '0')}</div>
+              <div class="action-text">${head ? `<strong>${head}</strong>` : ''}${body}</div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    ` : '';
+
+    const shiftsHTML = shifts && shifts.length ? shifts.map(s => `
+      <div class="shift-row">
+        <span class="shift-arrow ${s.dir.toLowerCase()}">${s.dir === 'UP' ? '↑' : '↓'}</span>
+        <span class="shift-ticker">${s.ticker}</span>
+        <span class="shift-detail">#${s.old} → #${s.new} · ${s.name || ''}</span>
+      </div>
+    `).join('') : `<div class="shift-empty">No significant rank shifts</div>`;
+
+    $('#main-content').innerHTML = `
+      <section class="headline">
+        <div class="headline-label">AI Recap · ${fmtAge(timestamp)}</div>
+        <div class="recap">
+          ${recap || '<span class="recap-empty">— recap unavailable for this run —</span>'}
+        </div>
+      </section>
+
+      <section class="card regime-card">
+        <div class="card-header">
+          <h2 class="card-title">Regime</h2>
+          <span class="card-sub">SIGNAL sizing</span>
+        </div>
+
+        <div class="regime-classification">
+          <div class="regime-label ${regimeClass}">${regime}</div>
+        </div>
+
+        <div class="regime-context">
+          Leaders: <strong>${top3.join(' · ')}</strong><br/>
+          Laggards: <strong>${bot3.join(' · ')}</strong>
+        </div>
+
+        <div class="buckets" style="margin-top: 28px;">
+          ${bucketHTML('up', 'Size up', '1.25×', buckets.up)}
+          ${bucketHTML('normal', 'Normal', '1.00×', buckets.normal)}
+          ${bucketHTML('trim', 'Trim', '0.75×', buckets.trim)}
+          ${bucketHTML('skip', 'Half / skip', '0.50×', buckets.skip)}
+        </div>
+
+        ${actionsHTML}
+      </section>
+
+      <div class="right-col">
+        <section class="card biotech-card">
+          <div class="card-header">
+            <h2 class="card-title">Biotech</h2>
+            <span class="card-sub">XBI/SPY · XBI/IBB</span>
+          </div>
+          <div class="biotech-signal ${biotechClass}">${biotechSignal}</div>
+          <div class="ratio-grid">
+            <div class="ratio-item">
+              <span class="label">XBI/SPY 1mo</span>
+              <span class="value ${pctClass(biotechRatios.xbiSpyMo)}">${fmtPct(biotechRatios.xbiSpyMo)}</span>
+            </div>
+            <div class="ratio-item">
+              <span class="label">XBI/SPY 3mo</span>
+              <span class="value ${pctClass(biotechRatios.xbiSpyQt)}">${fmtPct(biotechRatios.xbiSpyQt)}</span>
+            </div>
+            <div class="ratio-item">
+              <span class="label">XBI/IBB 1mo</span>
+              <span class="value ${pctClass(biotechRatios.xbiIbbMo)}">${fmtPct(biotechRatios.xbiIbbMo)}</span>
+            </div>
+            <div class="ratio-item">
+              <span class="label">Confirms risk-on</span>
+              <span class="value">${biotechRatios.xbiIbbMo > 0 ? 'YES' : 'NO'}</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="card rankings-card">
+          <div class="card-header">
+            <h2 class="card-title">Rankings</h2>
+            <span class="card-sub">RS vs SPY</span>
+          </div>
+          <table class="rank-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Ticker</th>
+                <th>Comp</th>
+                <th>1w</th>
+                <th>1m</th>
+                <th>3m</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((r, i) => {
+                const cls = i < 3 ? 'top-rank' : (i >= rows.length - 3 ? 'bot-rank' : '');
+                return `
+                  <tr class="${cls}">
+                    <td>${String(i + 1).padStart(2, '0')}</td>
+                    <td class="tk-cell">${r.ticker}</td>
+                    <td class="${pctClass(r.composite)}">${fmtNum(r.composite)}</td>
+                    <td class="${pctClass(r.wk)}">${fmtNum(r.wk)}</td>
+                    <td class="${pctClass(r.mo)}">${fmtNum(r.mo)}</td>
+                    <td class="${pctClass(r.qt)}">${fmtNum(r.qt)}</td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card shifts-card">
+          <div class="card-header">
+            <h2 class="card-title">Shifts</h2>
+            <span class="card-sub">vs prior run</span>
+          </div>
+          ${shiftsHTML}
+        </section>
+      </div>
+    `;
+  }
+
+  async function loadData() {
+    try {
+      const res = await fetch('/api/latest');
+      if (!res.ok) {
+        renderEmpty();
+        return;
+      }
+      const data = await res.json();
+      render(data);
+      $('#last-run').textContent = data.timestamp ? fmtAge(data.timestamp) : 'never';
+    } catch (e) {
+      console.error('Load failed:', e);
+      renderEmpty();
+    }
+  }
+
+  async function runScan() {
+    const btn = $('#scan-btn');
+    const allBtns = document.querySelectorAll('.scan-btn');
+    allBtns.forEach(b => b.disabled = true);
+    btn.textContent = 'Scanning…';
+    toast('Scan triggered. Fetching data…');
+
+    try {
+      const res = await fetch('/run', { method: 'POST' });
+      if (!res.ok && res.status !== 202) throw new Error('HTTP ' + res.status);
+
+      // Poll until the timestamp updates
+      let initial = null;
+      try {
+        const init = await fetch('/api/latest').then(r => r.ok ? r.json() : null);
+        initial = init?.timestamp || null;
+      } catch {}
+
+      let attempts = 0;
+      const poll = async () => {
+        attempts++;
+        try {
+          const res = await fetch('/api/latest');
+          if (res.ok) {
+            const data = await res.json();
+            if (data.timestamp && data.timestamp !== initial) {
+              render(data);
+              $('#last-run').textContent = fmtAge(data.timestamp);
+              toast('Scan complete.');
+              allBtns.forEach(b => b.disabled = false);
+              btn.textContent = 'Run Scan';
+              return;
+            }
+          }
+        } catch {}
+        if (attempts < 30) {
+          setTimeout(poll, 2000);
+        } else {
+          toast('Scan taking longer than expected. Check Railway logs.');
+          allBtns.forEach(b => b.disabled = false);
+          btn.textContent = 'Run Scan';
+        }
+      };
+      setTimeout(poll, 3000);
+    } catch (e) {
+      toast('Scan failed: ' + e.message);
+      allBtns.forEach(b => b.disabled = false);
+      btn.textContent = 'Run Scan';
+    }
+  }
+
+  $('#scan-btn').addEventListener('click', runScan);
+  window.runScan = runScan;
+
+  loadData();
+  // Auto-refresh "last run" age every minute
+  setInterval(() => {
+    const ts = window._lastTs;
+    if (ts) $('#last-run').textContent = fmtAge(ts);
+  }, 60000);
+</script>
+</body>
+</html>
