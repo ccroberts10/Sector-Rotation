@@ -59,20 +59,41 @@ const SNAPSHOT_PATH = path.join(DATA_DIR, 'sectorRotationSnapshot.json');
 const LATEST_PATH = path.join(DATA_DIR, 'sectorRotationLatest.json');
 
 // ---------------------------------------------------------------------------
-// Tradier fetch
+// Alpaca historical bars fetch
 // ---------------------------------------------------------------------------
+// Uses Alpaca's /v2/stocks/bars endpoint. Daily bars are free on both paper
+// and live accounts. Supports multiple env var naming conventions.
 
-function tradierGet(pathStr) {
+function alpacaCreds() {
+  const key =
+    process.env.ALPACA_KEY ||
+    process.env.ALPACA_API_KEY ||
+    process.env.APCA_API_KEY_ID;
+  const secret =
+    process.env.ALPACA_SECRET ||
+    process.env.ALPACA_SECRET_KEY ||
+    process.env.APCA_API_SECRET_KEY;
+  return { key, secret };
+}
+
+function alpacaGet(pathStr) {
   return new Promise((resolve, reject) => {
-    const token = process.env.TRADIER_TOKEN || process.env.TRADIER_API_KEY;
-    if (!token) return reject(new Error('TRADIER_TOKEN not set'));
+    const { key, secret } = alpacaCreds();
+    if (!key || !secret) {
+      return reject(
+        new Error(
+          'Alpaca creds not set. Expected ALPACA_KEY and ALPACA_SECRET in env.'
+        )
+      );
+    }
 
     const opts = {
-      hostname: 'api.tradier.com',
+      hostname: 'data.alpaca.markets',
       path: pathStr,
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${token}`,
+        'APCA-API-KEY-ID': key,
+        'APCA-API-SECRET-KEY': secret,
         Accept: 'application/json',
       },
     };
@@ -82,9 +103,19 @@ function tradierGet(pathStr) {
       res.on('data', (c) => (body += c));
       res.on('end', () => {
         try {
-          resolve(JSON.parse(body));
+          const parsed = JSON.parse(body);
+          if (res.statusCode >= 400) {
+            return reject(
+              new Error(
+                `Alpaca ${res.statusCode}: ${parsed.message || JSON.stringify(parsed)}`
+              )
+            );
+          }
+          resolve(parsed);
         } catch (e) {
-          reject(new Error(`Tradier parse error: ${e.message}`));
+          reject(
+            new Error(`Alpaca parse error: ${e.message} (status ${res.statusCode})`)
+          );
         }
       });
     });
@@ -95,17 +126,31 @@ function tradierGet(pathStr) {
 
 async function fetchHistory(symbol, days = 100) {
   const end = new Date();
+  // Back off the end time slightly to avoid edge-of-data issues
+  end.setMinutes(end.getMinutes() - 20);
   const start = new Date();
   start.setDate(start.getDate() - days * 1.6);
 
-  const fmt = (d) => d.toISOString().slice(0, 10);
-  const url = `/v1/markets/history?symbol=${symbol}&interval=daily&start=${fmt(start)}&end=${fmt(end)}`;
+  const url =
+    `/v2/stocks/${encodeURIComponent(symbol)}/bars` +
+    `?start=${encodeURIComponent(start.toISOString())}` +
+    `&end=${encodeURIComponent(end.toISOString())}` +
+    `&timeframe=1Day` +
+    `&limit=1000` +
+    `&adjustment=raw` +
+    `&feed=iex`;
 
-  const res = await tradierGet(url);
-  const days_ = res?.history?.day;
-  if (!days_) throw new Error(`No history for ${symbol}`);
-  const arr = Array.isArray(days_) ? days_ : [days_];
-  return arr.map((d) => ({ date: d.date, close: parseFloat(d.close) }));
+  const res = await alpacaGet(url);
+  const bars = res?.bars;
+  if (!bars || !Array.isArray(bars) || bars.length === 0) {
+    throw new Error(`No history for ${symbol}`);
+  }
+
+  // Alpaca returns: [{ t: "2024-01-02T05:00:00Z", o, h, l, c, v, n, vw }, ...]
+  return bars.map((b) => ({
+    date: b.t.slice(0, 10),
+    close: parseFloat(b.c),
+  }));
 }
 
 // ---------------------------------------------------------------------------
