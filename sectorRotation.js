@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { buildRegimeCard } = require('./regimeAdjustment');
 const { generateRecap } = require('./aiRecap');
+const { buildRiskRegime } = require('./riskRegime');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -33,6 +34,7 @@ const SECTOR_ETFS = {
   XLC: 'Communication Services',
 };
 
+// XBI/IBB for biotech read
 const EXTRA_TICKERS = ['XBI', 'IBB'];
 const BENCHMARK = 'SPY';
 
@@ -151,6 +153,62 @@ async function fetchHistory(symbol, days = 100) {
     date: b.t.slice(0, 10),
     close: parseFloat(b.c),
   }));
+}
+
+// ---------------------------------------------------------------------------
+// VIX fetch via Yahoo Finance (free, no auth)
+// ---------------------------------------------------------------------------
+// Alpaca doesn't serve the VIX index ($VIX / ^VIX) through its stocks endpoint
+// since it's an index, not an equity. Yahoo's chart API is free and reliable
+// for index data. We just need a single recent close.
+
+function yahooGet(symbol) {
+  return new Promise((resolve, reject) => {
+    const opts = {
+      hostname: 'query1.finance.yahoo.com',
+      path: `/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=3mo`,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; sector-rotation-scanner/1.0)',
+        Accept: 'application/json',
+      },
+    };
+    const req = https.request(opts, (res) => {
+      let body = '';
+      res.on('data', (c) => (body += c));
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch (e) {
+          reject(new Error(`Yahoo parse error: ${e.message}`));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function fetchVix() {
+  try {
+    const res = await yahooGet('^VIX');
+    const result = res?.chart?.result?.[0];
+    if (!result) throw new Error('No chart result');
+    const timestamps = result.timestamp || [];
+    const closes = result.indicators?.quote?.[0]?.close || [];
+    const bars = [];
+    for (let i = 0; i < timestamps.length; i++) {
+      if (closes[i] === null || closes[i] === undefined) continue;
+      bars.push({
+        date: new Date(timestamps[i] * 1000).toISOString().slice(0, 10),
+        close: parseFloat(closes[i]),
+      });
+    }
+    return bars;
+  } catch (e) {
+    console.warn('VIX fetch failed:', e.message);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -286,11 +344,18 @@ async function run() {
   const data = {};
   for (const t of ALL_TICKERS) {
     try {
-      data[t] = await fetchHistory(t, 100);
+      data[t] = await fetchHistory(t, 250);
       await new Promise((r) => setTimeout(r, 150));
     } catch (e) {
       console.warn(`Failed to fetch ${t}:`, e.message);
     }
+  }
+
+  // Fetch VIX from Yahoo (free, no auth)
+  console.log('Fetching VIX...');
+  data.VIX = await fetchVix();
+  if (data.VIX) {
+    console.log(`VIX last close: ${data.VIX[data.VIX.length - 1]?.close?.toFixed(2)}`);
   }
 
   const spy = data[BENCHMARK];
@@ -385,6 +450,32 @@ async function run() {
   const regimeCard = buildRegimeCard(rows, biotechSignal, shifts);
   msg += regimeCard.text;
 
+  // --- Risk regime overlay (defensive composite, XLY/XLP, SPY trend, VIX, velocity) ---
+  const riskRegime = buildRiskRegime(rows, data);
+
+  // Append a compact risk read to the message
+  msg += '\nRISK REGIME\n------------------------------------\n';
+  msg += `Verdict: ${riskRegime.verdict.verdict} (score ${riskRegime.verdict.score})\n`;
+  if (riskRegime.defensive) {
+    msg += `Defensives avg rank: ${riskRegime.defensive.avgRank} — ${riskRegime.defensive.signal}\n`;
+  }
+  if (riskRegime.xlyXlp) {
+    msg += `XLY/XLP 1m: ${riskRegime.xlyXlp.change1m}% — ${riskRegime.xlyXlp.signal}\n`;
+  }
+  if (riskRegime.spyTrend) {
+    const s = riskRegime.spyTrend;
+    msg += `SPY: ${s.trend} (50DMA ${s.pctFromMa50 >= 0 ? '+' : ''}${s.pctFromMa50}%, 200DMA ${s.pctFromMa200 >= 0 ? '+' : ''}${s.pctFromMa200}%)\n`;
+    if (s.vixLevel !== null) {
+      msg += `VIX: ${s.vixLevel} — ${s.vixSignal}\n`;
+    }
+  }
+  if (riskRegime.velocity.length) {
+    msg += `Velocity flags: ${riskRegime.velocity.map((v) => `${v.ticker} ${v.type}`).join(', ')}\n`;
+  }
+  if (riskRegime.verdict.reasons.length) {
+    msg += `Why: ${riskRegime.verdict.reasons.join('; ')}\n`;
+  }
+
   // --- AI recap (Claude API, optional) ---
   console.log('Generating AI recap...');
   const recap = await generateRecap({
@@ -392,6 +483,7 @@ async function run() {
     biotechSignal,
     shifts,
     regime: regimeCard.regime,
+    riskRegime,
   });
   if (recap) {
     msg = `AI RECAP\n------------------------------------\n${recap}\n\n` + msg;
@@ -400,9 +492,17 @@ async function run() {
   console.log('\n' + msg);
 
   // --- Alert and save ---
-  const title = shifts.length
-    ? `Sector Rotation: ${shifts.length} shift(s)`
-    : `Sector Rotation: ${top3[0].ticker} leading`;
+  // Lead the title with risk verdict if it's actionable
+  let title;
+  if (riskRegime.verdict.verdict === 'TAKE RISK OFF') {
+    title = `⚠️ TAKE RISK OFF — ${regimeCard.regime}`;
+  } else if (riskRegime.verdict.verdict === 'CAUTION') {
+    title = `⚠️ CAUTION — ${top3[0].ticker} leading`;
+  } else if (shifts.length) {
+    title = `Sector Rotation: ${shifts.length} shift(s)`;
+  } else {
+    title = `Sector Rotation: ${top3[0].ticker} leading`;
+  }
 
   await sendPushover(title, msg);
   saveSnapshot(rows);
@@ -416,6 +516,7 @@ async function run() {
     actions: regimeCard.actions,
     biotechSignal,
     biotechRatios,
+    riskRegime,
     rows: rows.map((r) => ({
       ticker: r.ticker,
       name: r.name,
