@@ -193,6 +193,99 @@
     font-style: normal;
   }
 
+  /* === Risk regime === */
+  .risk-banner {
+    grid-column: 1 / -1;
+    padding: 18px 26px;
+    border: 1px solid;
+    margin-top: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .risk-banner.take-risk-off {
+    border-color: var(--red);
+    background: linear-gradient(90deg, rgba(201,112,100,0.12) 0%, rgba(201,112,100,0.02) 100%);
+  }
+  .risk-banner.caution {
+    border-color: var(--amber);
+    background: linear-gradient(90deg, rgba(212,165,116,0.10) 0%, rgba(212,165,116,0.02) 100%);
+  }
+  .risk-banner.risk-on-confirmed {
+    border-color: var(--green);
+    background: linear-gradient(90deg, rgba(111,168,108,0.10) 0%, rgba(111,168,108,0.02) 100%);
+  }
+  .risk-banner-label {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 26px;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+  }
+  .risk-banner.take-risk-off .risk-banner-label { color: var(--red); }
+  .risk-banner.caution .risk-banner-label { color: var(--amber); }
+  .risk-banner.risk-on-confirmed .risk-banner-label { color: var(--green); }
+  .risk-banner-reasons {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
+  }
+
+  .risk-panel {
+    grid-column: 1 / -1;
+  }
+  .risk-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--line);
+  }
+  @media (max-width: 920px) {
+    .risk-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  .risk-tile {
+    background: var(--bg-elev);
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .risk-tile-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+  }
+  .risk-tile-value {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 28px;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    margin-top: 4px;
+    color: var(--text);
+  }
+  .risk-tile-value.warn { color: var(--red); }
+  .risk-tile-value.good { color: var(--green); }
+  .risk-tile-sub {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
+    margin-top: 4px;
+    line-height: 1.4;
+  }
+  .risk-tile-detail {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-faint);
+    letter-spacing: 0.04em;
+    margin-top: auto;
+    padding-top: 6px;
+  }
+
   /* === Card primitive === */
   .card {
     background: var(--bg-elev);
@@ -648,6 +741,7 @@
       actions = [],
       biotechSignal = 'UNKNOWN',
       biotechRatios = {},
+      riskRegime = null,
       rows = [],
       shifts = [],
       timestamp,
@@ -699,13 +793,97 @@
       </div>
     `).join('') : `<div class="shift-empty">No significant rank shifts</div>`;
 
+    // --- Risk regime rendering ---
+    let riskBannerHTML = '';
+    let riskPanelHTML = '';
+    if (riskRegime) {
+      const v = riskRegime.verdict || {};
+      const verdictClass = (v.verdict || 'neutral').toLowerCase().replace(/[^a-z]/g, '-');
+
+      // Banner: only show if verdict is actionable
+      if (v.verdict === 'TAKE RISK OFF' || v.verdict === 'CAUTION') {
+        riskBannerHTML = `
+          <section class="risk-banner ${verdictClass}">
+            <div class="risk-banner-label">${v.verdict === 'TAKE RISK OFF' ? '⚠ Take Risk Off' : '⚠ Caution'}</div>
+            <div class="risk-banner-reasons">${(v.reasons || []).join(' · ')}</div>
+          </section>
+        `;
+      } else if (v.verdict === 'RISK-ON CONFIRMED') {
+        riskBannerHTML = `
+          <section class="risk-banner risk-on-confirmed">
+            <div class="risk-banner-label">Risk-On Confirmed</div>
+            <div class="risk-banner-reasons">Press winners. No defensive bid in the data.</div>
+          </section>
+        `;
+      }
+
+      const def = riskRegime.defensive;
+      const xly = riskRegime.xlyXlp;
+      const spy = riskRegime.spyTrend;
+      const vel = riskRegime.velocity || [];
+
+      const defHTML = def ? `
+        <div class="risk-tile">
+          <div class="risk-tile-label">Defensives avg rank</div>
+          <div class="risk-tile-value ${def.signal === 'STRONG RISK-OFF' || def.signal === 'EMERGING RISK-OFF' ? 'warn' : (def.signal === 'STRONG RISK-ON' ? 'good' : '')}">${def.avgRank}</div>
+          <div class="risk-tile-sub">${def.signal}</div>
+          <div class="risk-tile-detail">${Object.entries(def.ranks).map(([t, r]) => `${t}#${r ?? '—'}`).join(' · ')}</div>
+        </div>
+      ` : '';
+
+      const xlyHTML = xly ? `
+        <div class="risk-tile">
+          <div class="risk-tile-label">XLY / XLP momentum</div>
+          <div class="risk-tile-value ${xly.signal.includes('RISK-OFF') || xly.signal === 'CAUTION' ? 'warn' : (xly.signal === 'RISK-ON' ? 'good' : '')}">${xly.change1m >= 0 ? '+' : ''}${xly.change1m}%</div>
+          <div class="risk-tile-sub">${xly.signal}</div>
+          <div class="risk-tile-detail">1w ${xly.change1w >= 0 ? '+' : ''}${xly.change1w}% · 3m ${xly.change3m !== null ? (xly.change3m >= 0 ? '+' : '') + xly.change3m + '%' : '—'}</div>
+        </div>
+      ` : '';
+
+      const spyHTML = spy ? `
+        <div class="risk-tile">
+          <div class="risk-tile-label">SPY trend</div>
+          <div class="risk-tile-value ${spy.trend === 'DOWNTREND' || spy.trend === 'CORRECTION' ? 'warn' : (spy.trend === 'UPTREND' ? 'good' : '')}">${spy.trend}</div>
+          <div class="risk-tile-sub">${spy.pctFromMa50 >= 0 ? '+' : ''}${spy.pctFromMa50}% vs 50DMA · ${spy.pctFromMa200 >= 0 ? '+' : ''}${spy.pctFromMa200}% vs 200DMA</div>
+          ${spy.vixLevel !== null ? `<div class="risk-tile-detail">VIX ${spy.vixLevel} · ${spy.vixSignal}</div>` : ''}
+        </div>
+      ` : '';
+
+      const velHTML = `
+        <div class="risk-tile">
+          <div class="risk-tile-label">Velocity flags</div>
+          <div class="risk-tile-value ${vel.filter(v => v.type === 'BREAKDOWN').length >= 2 ? 'warn' : ''}">${vel.length || '0'}</div>
+          <div class="risk-tile-sub">${vel.length === 0 ? 'No divergences' : vel.map(f => `${f.ticker} ${f.type === 'BREAKDOWN' ? '↓' : '↑'}`).join(' · ')}</div>
+          ${vel.length ? `<div class="risk-tile-detail">1w vs 1m divergence ≥ 2pp</div>` : ''}
+        </div>
+      `;
+
+      riskPanelHTML = `
+        <section class="card risk-panel">
+          <div class="card-header">
+            <h2 class="card-title">Risk Regime</h2>
+            <span class="card-sub">Verdict · ${v.verdict || 'NEUTRAL'} · score ${v.score ?? 0}</span>
+          </div>
+          <div class="risk-grid">
+            ${defHTML}
+            ${xlyHTML}
+            ${spyHTML}
+            ${velHTML}
+          </div>
+        </section>
+      `;
+    }
+
     $('#main-content').innerHTML = `
+      ${riskBannerHTML}
       <section class="headline">
         <div class="headline-label">AI Recap · ${fmtAge(timestamp)}</div>
         <div class="recap">
           ${recap || '<span class="recap-empty">— recap unavailable for this run —</span>'}
         </div>
       </section>
+
+      ${riskPanelHTML}
 
       <section class="card regime-card">
         <div class="card-header">
