@@ -97,14 +97,14 @@ async function generateRecap(ctx) {
   let capBlock = '';
   if (capitulation) {
     const lines = [`Capitulation verdict: ${capitulation.verdict.verdict} (score ${capitulation.verdict.score})`];
-    if (capitulation.nymo) {
-      lines.push(`McClellan Oscillator (NYMO): ${capitulation.nymo.value} (${capitulation.nymo.signal})`);
-    }
-    if (capitulation.trin) {
-      lines.push(`TRIN: ${capitulation.trin.value} (${capitulation.trin.signal})`);
+    if (capitulation.vix) {
+      lines.push(`VIX: ${capitulation.vix.value} (${capitulation.vix.signal})`);
     }
     if (capitulation.cpc) {
       lines.push(`Put/Call ratio: ${capitulation.cpc.value} (${capitulation.cpc.signal})`);
+    }
+    if (capitulation.breadth) {
+      lines.push(`Sector breadth: ${capitulation.breadth.below}/${capitulation.breadth.total} sectors below 20DMA (${capitulation.breadth.signal})`);
     }
     if (capitulation.verdict.reasons.length) {
       lines.push(`Firing: ${capitulation.verdict.reasons.join('; ')}`);
