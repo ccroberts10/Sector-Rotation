@@ -157,13 +157,19 @@ async function fetchHistory(symbol, days = 100) {
 }
 
 // ---------------------------------------------------------------------------
-// Index data fetch — VIX from Yahoo (was working), CPC from CBOE direct
+// Index data fetch — FRED API
 // ---------------------------------------------------------------------------
-// Alpaca doesn't serve indices. Tried Stooq/Yahoo for breadth indices (NYMO,
-// TRIN) but both are unreliable for those. New approach:
-//   - VIX from Yahoo (worked previously)
-//   - CPC from CBOE's own daily CSV — direct from the source, no auth
-//   - Sector breadth computed from sector data we already have (no extra fetch)
+// FRED (St. Louis Fed) is the bulletproof free source for index data. Free
+// API key, no rate limits for daily polling, decades of stable history.
+// Register at: https://fred.stlouisfed.org/docs/api/api_key.html
+// Then set FRED_API_KEY in Railway Variables.
+//
+// What we fetch:
+//   - VIXCLS = CBOE Volatility Index (^VIX)
+//   - VXVCLS = CBOE 3-Month Volatility Index (^VXV)
+//   - VIX/VXV ratio replaces the unreliable Put/Call as our fear-spike signal.
+//     When near-term implied vol > 3-month implied vol (ratio > 1), that's
+//     short-term fear pricing higher than longer-term — same contrarian read.
 
 const BROWSER_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -180,144 +186,96 @@ function httpsGet(opts) {
   });
 }
 
-// --- VIX from Yahoo Finance
-async function fetchVix() {
+// --- FRED API: fetch a series' recent observations
+async function fetchFredSeries(seriesId, days = 90) {
+  const apiKey = process.env.FRED_API_KEY;
+  if (!apiKey) {
+    console.warn(`  FRED ${seriesId}: FRED_API_KEY not set`);
+    return null;
+  }
+
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - days);
+  const fmt = (d) => d.toISOString().slice(0, 10);
+
+  const params = new URLSearchParams({
+    series_id: seriesId,
+    api_key: apiKey,
+    file_type: 'json',
+    observation_start: fmt(start),
+    observation_end: fmt(end),
+    sort_order: 'asc',
+  });
+
   try {
     const opts = {
-      hostname: 'query1.finance.yahoo.com',
-      path: `/v8/finance/chart/${encodeURIComponent('^VIX')}?interval=1d&range=3mo`,
+      hostname: 'api.stlouisfed.org',
+      path: `/fred/series/observations?${params}`,
       method: 'GET',
       headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
     };
     const { statusCode, body } = await httpsGet(opts);
-    if (statusCode !== 200) throw new Error(`HTTP ${statusCode}`);
-    const parsed = JSON.parse(body);
-    const result = parsed?.chart?.result?.[0];
-    if (!result) throw new Error('No chart result');
-    const timestamps = result.timestamp || [];
-    const closes = result.indicators?.quote?.[0]?.close || [];
-    const bars = [];
-    for (let i = 0; i < timestamps.length; i++) {
-      if (closes[i] === null || closes[i] === undefined) continue;
-      bars.push({
-        date: new Date(timestamps[i] * 1000).toISOString().slice(0, 10),
-        close: parseFloat(closes[i]),
-      });
+    if (statusCode !== 200) {
+      console.warn(`  FRED ${seriesId}: HTTP ${statusCode}`);
+      return null;
     }
-    if (bars.length === 0) throw new Error('No valid bars');
-    console.log(`  VIX: ${bars.length} bars from Yahoo`);
+    const parsed = JSON.parse(body);
+    const obs = parsed?.observations || [];
+    const bars = [];
+    for (const o of obs) {
+      const v = parseFloat(o.value);
+      if (isNaN(v) || o.value === '.') continue;  // FRED uses '.' for missing
+      bars.push({ date: o.date, close: v });
+    }
+    if (bars.length === 0) {
+      console.warn(`  FRED ${seriesId}: no valid observations`);
+      return null;
+    }
+    console.log(`  FRED ${seriesId}: ${bars.length} obs`);
     return bars;
   } catch (e) {
-    console.warn(`  VIX fetch failed: ${e.message || '(empty error)'}`);
+    console.warn(`  FRED ${seriesId}: ${e.message || '(empty)'}`);
     return null;
   }
 }
 
-// --- CBOE Put/Call ratio from CBOE direct
-// CBOE publishes a daily totals CSV. The "Total Put/Call Ratio" is the
-// equivalent of the ^CPC index. URL pattern:
-// https://cdn.cboe.com/api/global/us_indices/daily_prices/PUTCALL_History.csv
-async function fetchCpc() {
-  // CBOE provides a stable URL for the historical PUTCALL data
-  const urls = [
-    // Primary: CBOE's daily put/call CSV
-    {
-      host: 'cdn.cboe.com',
-      path: '/api/global/us_indices/daily_prices/PUTCALL_History.csv',
-    },
-    // Alternative path that CBOE has used
-    {
-      host: 'www.cboe.com',
-      path: '/us/options/market_statistics/daily/',
-    },
-  ];
+// --- VIX from FRED
+async function fetchVix() {
+  return fetchFredSeries('VIXCLS', 90);
+}
 
-  for (const u of urls) {
-    try {
-      const opts = {
-        hostname: u.host,
-        path: u.path,
-        method: 'GET',
-        headers: {
-          'User-Agent': BROWSER_UA,
-          Accept: 'text/csv,application/csv,text/plain,*/*',
-        },
-      };
-      const { statusCode, body } = await httpsGet(opts);
-      if (statusCode !== 200) {
-        console.warn(`  CPC ${u.host}: HTTP ${statusCode}`);
-        continue;
-      }
-      if (!body || body.length < 50) {
-        console.warn(`  CPC ${u.host}: empty body`);
-        continue;
-      }
+// --- VIX/VXV ratio — fetch both, compute aligned ratio series
+// Replaces CPC. Same fundamental signal: when short-term fear spikes above
+// longer-term, contrarians get interested.
+async function fetchVixVxvRatio() {
+  const [vix, vxv] = await Promise.all([
+    fetchFredSeries('VIXCLS', 90),
+    fetchFredSeries('VXVCLS', 90),
+  ]);
+  if (!vix || !vxv) return null;
 
-      // Parse the CSV. Format varies but typically:
-      // DATE,CALL,PUT,TOTAL,P/C Ratio
-      const lines = body.trim().split(/\r?\n/);
-      if (lines.length < 2) {
-        console.warn(`  CPC ${u.host}: too few lines`);
-        continue;
-      }
+  // Build a date-indexed map for VXV so we can align
+  const vxvByDate = {};
+  vxv.forEach((b) => { vxvByDate[b.date] = b.close; });
 
-      // Find header row — CBOE puts some preamble before the actual headers
-      let headerIdx = -1;
-      for (let i = 0; i < Math.min(10, lines.length); i++) {
-        const lower = lines[i].toLowerCase();
-        if (lower.includes('date') && (lower.includes('p/c') || lower.includes('ratio'))) {
-          headerIdx = i;
-          break;
-        }
-      }
-      if (headerIdx === -1) {
-        console.warn(`  CPC ${u.host}: no header row found`);
-        continue;
-      }
-
-      const header = lines[headerIdx].toLowerCase().split(',');
-      const dateCol = header.findIndex((h) => h.trim() === 'date');
-      const ratioCol = header.findIndex((h) =>
-        h.trim().includes('p/c') || h.trim().includes('ratio') || h.trim().includes('total')
-      );
-
-      if (dateCol === -1 || ratioCol === -1) {
-        console.warn(`  CPC ${u.host}: missing date/ratio columns`);
-        continue;
-      }
-
-      const bars = [];
-      for (let i = headerIdx + 1; i < lines.length; i++) {
-        const cols = lines[i].split(',');
-        if (cols.length <= Math.max(dateCol, ratioCol)) continue;
-        const dateRaw = cols[dateCol].trim();
-        const ratio = parseFloat(cols[ratioCol]);
-        if (isNaN(ratio) || ratio <= 0 || ratio > 5) continue;
-        // Normalize date — CBOE uses MM/DD/YYYY or YYYY-MM-DD
-        let date = dateRaw;
-        if (dateRaw.includes('/')) {
-          const [m, d, y] = dateRaw.split('/');
-          date = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-        }
-        bars.push({ date, close: ratio });
-      }
-
-      // Sort ascending by date
-      bars.sort((a, b) => a.date.localeCompare(b.date));
-
-      if (bars.length === 0) {
-        console.warn(`  CPC ${u.host}: no valid rows`);
-        continue;
-      }
-
-      console.log(`  CPC: ${bars.length} bars from ${u.host}`);
-      return bars;
-    } catch (e) {
-      console.warn(`  CPC ${u.host} error: ${e.message || '(empty)'}`);
-    }
+  const bars = [];
+  for (const v of vix) {
+    const vxvVal = vxvByDate[v.date];
+    if (!vxvVal || vxvVal <= 0) continue;
+    bars.push({ date: v.date, close: v.close / vxvVal });
   }
+  if (bars.length === 0) {
+    console.warn('  VIX/VXV ratio: no aligned dates');
+    return null;
+  }
+  console.log(`  VIX/VXV: ${bars.length} aligned ratio bars`);
+  return bars;
+}
 
-  return null;
+// Keep the fetchCpc name for backward compatibility but route to the new signal
+async function fetchCpc() {
+  return fetchVixVxvRatio();
 }
 
 // ---------------------------------------------------------------------------
