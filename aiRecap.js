@@ -6,7 +6,7 @@
 const https = require('https');
 
 const MODEL = 'claude-haiku-4-5';
-const MAX_TOKENS = 250;
+const MAX_TOKENS = 500;
 
 function anthropicCall(prompt) {
   return new Promise((resolve, reject) => {
@@ -122,12 +122,12 @@ ${ranking}
 Biotech read: ${biotechSignal}
 Rank shifts vs prior run: ${shiftText}
 ${riskBlock}${capBlock}
-Write a 2-3 sentence recap in plain, direct prose. No bullet points, no preamble, no "in summary." Focus on:
+Write a tight 3-4 sentence recap in plain, direct prose. Target 90-130 words total — be ruthless about brevity. No bullet points, no preamble, no "in summary." Focus on:
 1. The most important verdict right now — is the regime risk-off, oversold/bounce-prone, or neither?
 2. The single most actionable takeaway given ALL the data (sector ranks, risk regime, capitulation watch)
 3. One specific thing to watch tomorrow that would confirm or contradict the current read
 
-Be specific. Reference actual tickers and concrete numbers. Trader-to-trader tone, not corporate.
+Be specific. Reference actual tickers and concrete numbers. Trader-to-trader tone, not corporate. Finish your thought — do not get cut off mid-sentence.
 
 Priority rules:
 - If capitulation verdict is BOUNCE SETUP, that's the headline — lead with it (oversold conditions argue for putting risk back ON, even if risk regime is risk-off)
