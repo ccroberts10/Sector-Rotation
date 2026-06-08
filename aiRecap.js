@@ -56,7 +56,7 @@ function anthropicCall(prompt) {
  * @returns {Promise<string>} 2-3 sentence recap, or '' if API not configured
  */
 async function generateRecap(ctx) {
-  const { rows, biotechSignal, shifts, regime, riskRegime } = ctx;
+  const { rows, biotechSignal, shifts, regime, riskRegime, capitulation } = ctx;
 
   // Compact data for the prompt
   const ranking = rows
@@ -93,6 +93,25 @@ async function generateRecap(ctx) {
     riskBlock = '\nRisk regime overlay:\n' + lines.join('\n') + '\n';
   }
 
+  // Build capitulation context block
+  let capBlock = '';
+  if (capitulation) {
+    const lines = [`Capitulation verdict: ${capitulation.verdict.verdict} (score ${capitulation.verdict.score})`];
+    if (capitulation.nymo) {
+      lines.push(`McClellan Oscillator (NYMO): ${capitulation.nymo.value} (${capitulation.nymo.signal})`);
+    }
+    if (capitulation.trin) {
+      lines.push(`TRIN: ${capitulation.trin.value} (${capitulation.trin.signal})`);
+    }
+    if (capitulation.cpc) {
+      lines.push(`Put/Call ratio: ${capitulation.cpc.value} (${capitulation.cpc.signal})`);
+    }
+    if (capitulation.verdict.reasons.length) {
+      lines.push(`Firing: ${capitulation.verdict.reasons.join('; ')}`);
+    }
+    capBlock = '\nCapitulation watch (oversold/bounce signals):\n' + lines.join('\n') + '\n';
+  }
+
   const prompt = `You are an experienced market strategist writing a brief end-of-day note for an active trader running a tech/semis-heavy momentum book.
 
 Today's sector rotation data:
@@ -102,13 +121,19 @@ ${ranking}
 
 Biotech read: ${biotechSignal}
 Rank shifts vs prior run: ${shiftText}
-${riskBlock}
+${riskBlock}${capBlock}
 Write a 2-3 sentence recap in plain, direct prose. No bullet points, no preamble, no "in summary." Focus on:
-1. The risk verdict and whether the trader should be taking risk off or pressing
-2. The single most actionable takeaway given the rankings AND the risk regime
+1. The most important verdict right now — is the regime risk-off, oversold/bounce-prone, or neither?
+2. The single most actionable takeaway given ALL the data (sector ranks, risk regime, capitulation watch)
 3. One specific thing to watch tomorrow that would confirm or contradict the current read
 
-Be specific. Reference actual sector tickers and concrete numbers. Trader-to-trader tone, not corporate. If the risk verdict is "TAKE RISK OFF" or "CAUTION", lead with that — don't bury the warning.`;
+Be specific. Reference actual tickers and concrete numbers. Trader-to-trader tone, not corporate.
+
+Priority rules:
+- If capitulation verdict is BOUNCE SETUP, that's the headline — lead with it (oversold conditions argue for putting risk back ON, even if risk regime is risk-off)
+- If risk regime is TAKE RISK OFF AND capitulation is NEUTRAL, lead with the risk-off warning
+- If both fire at once (rare but powerful), call out the resolution — a TAKE RISK OFF + BOUNCE SETUP combo often marks the bottom
+- Otherwise, lead with whichever signal is strongest`;
 
   try {
     const recap = await anthropicCall(prompt);
