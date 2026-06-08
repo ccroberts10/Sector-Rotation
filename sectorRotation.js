@@ -15,6 +15,7 @@ const path = require('path');
 const { buildRegimeCard } = require('./regimeAdjustment');
 const { generateRecap } = require('./aiRecap');
 const { buildRiskRegime } = require('./riskRegime');
+const { buildCapitulation } = require('./capitulation');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -189,9 +190,9 @@ function yahooGet(symbol) {
   });
 }
 
-async function fetchVix() {
+async function fetchYahooBars(symbol, label) {
   try {
-    const res = await yahooGet('^VIX');
+    const res = await yahooGet(symbol);
     const result = res?.chart?.result?.[0];
     if (!result) throw new Error('No chart result');
     const timestamps = result.timestamp || [];
@@ -206,10 +207,16 @@ async function fetchVix() {
     }
     return bars;
   } catch (e) {
-    console.warn('VIX fetch failed:', e.message);
+    console.warn(`${label || symbol} fetch failed:`, e.message);
     return null;
   }
 }
+
+// Convenience wrappers
+const fetchVix = () => fetchYahooBars('^VIX', 'VIX');
+const fetchNymo = () => fetchYahooBars('^NYMO', 'NYMO');
+const fetchTrin = () => fetchYahooBars('^TRIN', 'TRIN');
+const fetchCpc = () => fetchYahooBars('^CPC', 'CPC');
 
 // ---------------------------------------------------------------------------
 // Math helpers
@@ -351,12 +358,23 @@ async function run() {
     }
   }
 
-  // Fetch VIX from Yahoo (free, no auth)
-  console.log('Fetching VIX...');
-  data.VIX = await fetchVix();
-  if (data.VIX) {
-    console.log(`VIX last close: ${data.VIX[data.VIX.length - 1]?.close?.toFixed(2)}`);
-  }
+  // Fetch VIX + breadth indicators from Yahoo (free, no auth) — parallel
+  console.log('Fetching VIX + capitulation indicators...');
+  const [vix, nymo, trin, cpc] = await Promise.all([
+    fetchVix(),
+    fetchNymo(),
+    fetchTrin(),
+    fetchCpc(),
+  ]);
+  data.VIX = vix;
+  data.NYMO = nymo;
+  data.TRIN = trin;
+  data.CPC = cpc;
+
+  if (data.VIX) console.log(`VIX last close: ${data.VIX[data.VIX.length - 1]?.close?.toFixed(2)}`);
+  if (data.NYMO) console.log(`NYMO: ${data.NYMO[data.NYMO.length - 1]?.close?.toFixed(2)}`);
+  if (data.TRIN) console.log(`TRIN: ${data.TRIN[data.TRIN.length - 1]?.close?.toFixed(2)}`);
+  if (data.CPC) console.log(`CPC: ${data.CPC[data.CPC.length - 1]?.close?.toFixed(2)}`);
 
   const spy = data[BENCHMARK];
   if (!spy) throw new Error('No SPY data — cannot compute relative strength.');
@@ -453,6 +471,9 @@ async function run() {
   // --- Risk regime overlay (defensive composite, XLY/XLP, SPY trend, VIX, velocity) ---
   const riskRegime = buildRiskRegime(rows, data);
 
+  // --- Capitulation watch (NYMO, TRIN, CPC) ---
+  const capitulation = buildCapitulation(data);
+
   // Append a compact risk read to the message
   msg += '\nRISK REGIME\n------------------------------------\n';
   msg += `Verdict: ${riskRegime.verdict.verdict} (score ${riskRegime.verdict.score})\n`;
@@ -476,6 +497,22 @@ async function run() {
     msg += `Why: ${riskRegime.verdict.reasons.join('; ')}\n`;
   }
 
+  // Append capitulation read
+  msg += '\nCAPITULATION WATCH\n------------------------------------\n';
+  msg += `Verdict: ${capitulation.verdict.verdict} (score ${capitulation.verdict.score})\n`;
+  if (capitulation.nymo) {
+    msg += `NYMO: ${capitulation.nymo.value} — ${capitulation.nymo.signal}\n`;
+  }
+  if (capitulation.trin) {
+    msg += `TRIN: ${capitulation.trin.value} — ${capitulation.trin.signal}\n`;
+  }
+  if (capitulation.cpc) {
+    msg += `P/C Ratio: ${capitulation.cpc.value} — ${capitulation.cpc.signal}\n`;
+  }
+  if (capitulation.verdict.reasons.length) {
+    msg += `Why: ${capitulation.verdict.reasons.join('; ')}\n`;
+  }
+
   // --- AI recap (Claude API, optional) ---
   console.log('Generating AI recap...');
   const recap = await generateRecap({
@@ -484,6 +521,7 @@ async function run() {
     shifts,
     regime: regimeCard.regime,
     riskRegime,
+    capitulation,
   });
   if (recap) {
     msg = `AI RECAP\n------------------------------------\n${recap}\n\n` + msg;
@@ -492,12 +530,16 @@ async function run() {
   console.log('\n' + msg);
 
   // --- Alert and save ---
-  // Lead the title with risk verdict if it's actionable
+  // Lead the title with the most actionable verdict
   let title;
-  if (riskRegime.verdict.verdict === 'TAKE RISK OFF') {
+  if (capitulation.verdict.verdict === 'BOUNCE SETUP') {
+    title = `🟢 BOUNCE SETUP — ${capitulation.verdict.firing.join('+')}`;
+  } else if (riskRegime.verdict.verdict === 'TAKE RISK OFF') {
     title = `⚠️ TAKE RISK OFF — ${regimeCard.regime}`;
   } else if (riskRegime.verdict.verdict === 'CAUTION') {
     title = `⚠️ CAUTION — ${top3[0].ticker} leading`;
+  } else if (capitulation.verdict.verdict === 'OVERSOLD') {
+    title = `🟡 Oversold — ${capitulation.verdict.firing.join('+')}`;
   } else if (shifts.length) {
     title = `Sector Rotation: ${shifts.length} shift(s)`;
   } else {
@@ -517,6 +559,7 @@ async function run() {
     biotechSignal,
     biotechRatios,
     riskRegime,
+    capitulation,
     rows: rows.map((r) => ({
       ticker: r.ticker,
       name: r.name,
