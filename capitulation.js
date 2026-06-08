@@ -67,13 +67,16 @@ function vixRead(bars) {
 }
 
 // ---------------------------------------------------------------------------
-// Signal 2: CBOE Put/Call ratio
+// Signal 2: VIX / VXV ratio (term-structure fear gauge)
 // ---------------------------------------------------------------------------
-//   < 0.7  = complacency
-//   0.7-0.9 = normal
-//   > 1.0  = elevated fear
-//   > 1.2  = extreme fear
-//   > 1.4  = panic
+// Replaces the unreliable CBOE Put/Call ratio with a more robust fear signal.
+// VIX is 30-day implied vol; VXV is 3-month implied vol. The ratio:
+//   < 0.85 = complacency (near-term vol cheap vs longer-term)
+//   0.85-0.95 = normal contango
+//   > 1.00 = inverted — near-term fear pricing higher than 3-month, contrarian bullish
+//   > 1.10 = strong fear, historic bounce zone
+//   > 1.20 = extreme inversion, panic
+// Mathematically different from CPC but captures the same psychology.
 
 function cpcRead(bars) {
   if (!bars || bars.length === 0) return null;
@@ -84,24 +87,24 @@ function cpcRead(bars) {
     ? bars.slice(-5).reduce((a, b) => a + b.close, 0) / 5
     : null;
 
-  let signal = 'NEUTRAL';
+  let signal = 'NORMAL';
   let fires = false;
-  if (value > 1.4) {
+  if (value > 1.20) {
     signal = 'PANIC';
     fires = true;
-  } else if (value > 1.2) {
-    signal = 'EXTREME FEAR';
+  } else if (value > 1.10) {
+    signal = 'STRONG FEAR';
     fires = true;
-  } else if (value > 1.0) {
-    signal = 'ELEVATED FEAR';
+  } else if (value > 1.00) {
+    signal = 'INVERTED';
     fires = true;
-  } else if (value < 0.7) {
+  } else if (value < 0.85) {
     signal = 'COMPLACENCY';
   }
 
   return {
-    value: parseFloat(value.toFixed(2)),
-    avg5: avg5 !== null ? parseFloat(avg5.toFixed(2)) : null,
+    value: parseFloat(value.toFixed(3)),
+    avg5: avg5 !== null ? parseFloat(avg5.toFixed(3)) : null,
     signal,
     fires,
   };
@@ -203,16 +206,16 @@ function capitulationVerdict(parts) {
   }
 
   if (cpc?.fires) {
-    firing.push('CPC');
+    firing.push('VIX/VXV');
     if (cpc.signal === 'PANIC') {
       score += 3;
-      reasons.push(`P/C ${cpc.value} — panic`);
-    } else if (cpc.signal === 'EXTREME FEAR') {
+      reasons.push(`VIX/VXV ${cpc.value} — panic inversion`);
+    } else if (cpc.signal === 'STRONG FEAR') {
       score += 2;
-      reasons.push(`P/C ${cpc.value} — extreme fear`);
+      reasons.push(`VIX/VXV ${cpc.value} — strong fear`);
     } else {
       score += 1;
-      reasons.push(`P/C ${cpc.value} — elevated fear`);
+      reasons.push(`VIX/VXV ${cpc.value} — term structure inverted`);
     }
   }
 
