@@ -101,7 +101,7 @@ async function generateRecap(ctx) {
       lines.push(`VIX: ${capitulation.vix.value} (${capitulation.vix.signal})`);
     }
     if (capitulation.cpc) {
-      lines.push(`Put/Call ratio: ${capitulation.cpc.value} (${capitulation.cpc.signal})`);
+      lines.push(`VIX/VXV ratio: ${capitulation.cpc.value} (${capitulation.cpc.signal})`);
     }
     if (capitulation.breadth) {
       lines.push(`Sector breadth: ${capitulation.breadth.below}/${capitulation.breadth.total} sectors below 20DMA (${capitulation.breadth.signal})`);
