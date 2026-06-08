@@ -235,14 +235,55 @@
   .risk-panel {
     grid-column: 1 / -1;
   }
+  .cap-panel {
+    grid-column: 1 / -1;
+  }
   .risk-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 1px;
     background: var(--line);
   }
+  .risk-grid-3 {
+    grid-template-columns: repeat(3, 1fr);
+  }
   @media (max-width: 920px) {
     .risk-grid { grid-template-columns: repeat(2, 1fr); }
+    .risk-grid-3 { grid-template-columns: 1fr; }
+  }
+
+  /* Capitulation banner — green, the inverse of risk-off */
+  .cap-banner {
+    grid-column: 1 / -1;
+    padding: 18px 26px;
+    border: 1px solid;
+    margin-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .cap-banner.bounce-setup {
+    border-color: var(--green);
+    background: linear-gradient(90deg, rgba(111,168,108,0.14) 0%, rgba(111,168,108,0.02) 100%);
+  }
+  .cap-banner.oversold {
+    border-color: var(--amber);
+    background: linear-gradient(90deg, rgba(212,165,116,0.10) 0%, rgba(212,165,116,0.02) 100%);
+  }
+  .cap-banner-label {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 26px;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+  }
+  .cap-banner.bounce-setup .cap-banner-label { color: var(--green); }
+  .cap-banner.oversold .cap-banner-label { color: var(--amber); }
+  .cap-banner-reasons {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
   }
   .risk-tile {
     background: var(--bg-elev);
@@ -742,6 +783,7 @@
       biotechSignal = 'UNKNOWN',
       biotechRatios = {},
       riskRegime = null,
+      capitulation = null,
       rows = [],
       shifts = [],
       timestamp,
@@ -874,8 +916,97 @@
       `;
     }
 
+    // --- Capitulation rendering ---
+    let capBannerHTML = '';
+    let capPanelHTML = '';
+    if (capitulation) {
+      const cv = capitulation.verdict || {};
+      const capVerdictClass = (cv.verdict || 'neutral').toLowerCase().replace(/[^a-z]/g, '-');
+
+      // Banner: only when actionable
+      if (cv.verdict === 'BOUNCE SETUP') {
+        capBannerHTML = `
+          <section class="cap-banner bounce-setup">
+            <div class="cap-banner-label">↑ Bounce Setup</div>
+            <div class="cap-banner-reasons">${(cv.reasons || []).join(' · ')}</div>
+          </section>
+        `;
+      } else if (cv.verdict === 'OVERSOLD') {
+        capBannerHTML = `
+          <section class="cap-banner oversold">
+            <div class="cap-banner-label">↑ Oversold — Watch for Reversal</div>
+            <div class="cap-banner-reasons">${(cv.reasons || []).join(' · ')}</div>
+          </section>
+        `;
+      }
+
+      const nymo = capitulation.nymo;
+      const trin = capitulation.trin;
+      const cpc = capitulation.cpc;
+
+      const nymoHTML = nymo ? `
+        <div class="risk-tile">
+          <div class="risk-tile-label">McClellan (NYMO)</div>
+          <div class="risk-tile-value ${nymo.fires ? 'good' : (nymo.signal === 'OVERBOUGHT' ? 'warn' : '')}">${nymo.value >= 0 ? '+' : ''}${nymo.value}</div>
+          <div class="risk-tile-sub">${nymo.signal}</div>
+          <div class="risk-tile-detail">&lt; -70 oversold · &lt; -100 extreme</div>
+        </div>
+      ` : `
+        <div class="risk-tile">
+          <div class="risk-tile-label">McClellan (NYMO)</div>
+          <div class="risk-tile-value" style="color:var(--text-faint)">—</div>
+          <div class="risk-tile-sub">unavailable</div>
+        </div>
+      `;
+
+      const trinHTML = trin ? `
+        <div class="risk-tile">
+          <div class="risk-tile-label">TRIN (Arms)</div>
+          <div class="risk-tile-value ${trin.fires ? 'good' : ''}">${trin.value}</div>
+          <div class="risk-tile-sub">${trin.signal}</div>
+          <div class="risk-tile-detail">&gt; 2.0 capitulation · &gt; 3.0 panic</div>
+        </div>
+      ` : `
+        <div class="risk-tile">
+          <div class="risk-tile-label">TRIN (Arms)</div>
+          <div class="risk-tile-value" style="color:var(--text-faint)">—</div>
+          <div class="risk-tile-sub">unavailable</div>
+        </div>
+      `;
+
+      const cpcHTML = cpc ? `
+        <div class="risk-tile">
+          <div class="risk-tile-label">Put/Call ratio</div>
+          <div class="risk-tile-value ${cpc.fires ? 'good' : (cpc.signal === 'COMPLACENCY' ? 'warn' : '')}">${cpc.value}</div>
+          <div class="risk-tile-sub">${cpc.signal}</div>
+          <div class="risk-tile-detail">&gt; 1.0 fear · &gt; 1.2 extreme${cpc.avg5 !== null ? ` · 5d avg ${cpc.avg5}` : ''}</div>
+        </div>
+      ` : `
+        <div class="risk-tile">
+          <div class="risk-tile-label">Put/Call ratio</div>
+          <div class="risk-tile-value" style="color:var(--text-faint)">—</div>
+          <div class="risk-tile-sub">unavailable</div>
+        </div>
+      `;
+
+      capPanelHTML = `
+        <section class="card cap-panel">
+          <div class="card-header">
+            <h2 class="card-title">Capitulation Watch</h2>
+            <span class="card-sub">Verdict · ${cv.verdict || 'NEUTRAL'} · score ${cv.score ?? 0} · ${(cv.firing || []).length}/3 firing</span>
+          </div>
+          <div class="risk-grid risk-grid-3">
+            ${nymoHTML}
+            ${trinHTML}
+            ${cpcHTML}
+          </div>
+        </section>
+      `;
+    }
+
     $('#main-content').innerHTML = `
       ${riskBannerHTML}
+      ${capBannerHTML}
       <section class="headline">
         <div class="headline-label">AI Recap · ${fmtAge(timestamp)}</div>
         <div class="recap">
@@ -884,6 +1015,7 @@
       </section>
 
       ${riskPanelHTML}
+      ${capPanelHTML}
 
       <section class="card regime-card">
         <div class="card-header">
