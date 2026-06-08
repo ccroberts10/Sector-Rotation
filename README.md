@@ -8,9 +8,11 @@ Designed to run continuously on Railway as its own service. Zero npm dependencie
 
 Visit your deployed Railway URL (e.g. `https://your-service.up.railway.app/`) to see:
 
-- **Risk regime banner** (when actionable) — bright TAKE RISK OFF or CAUTION alert at the top of the dashboard, with the reasons
-- **AI recap** — Claude-generated 2-3 sentence read on the day's rotation, incorporating the risk regime
-- **Risk regime panel** — four tiles showing defensive composite, XLY/XLP momentum, SPY trend (with 50/200DMA and VIX), and velocity divergence flags
+- **Risk regime banner** (when actionable) — bright TAKE RISK OFF or CAUTION alert at the top
+- **Capitulation banner** (when actionable) — BOUNCE SETUP or OVERSOLD alert signaling time to put risk back on
+- **AI recap** — Claude-generated 2-3 sentence read incorporating risk regime AND capitulation
+- **Risk regime panel** — defensive composite, XLY/XLP momentum, SPY trend (with 50/200DMA and VIX), velocity divergence
+- **Capitulation watch panel** — McClellan Oscillator (NYMO), TRIN (Arms Index), Put/Call ratio with thresholds
 - **Regime classification** — RISK-ON / RISK-OFF / MIXED with leaders and laggards
 - **SIGNAL sizing buckets** — every watchlist ticker mapped to size-up / normal / trim / skip
 - **Action items** — rotation-into and rotation-out alerts based on rank shifts
@@ -18,6 +20,16 @@ Visit your deployed Railway URL (e.g. `https://your-service.up.railway.app/`) to
 - **Full rankings** — all 11 sectors ranked by composite RS with 1w/1m/3m breakdowns
 - **Rank shifts** — sectors that moved 3+ positions vs the prior run
 - **Manual trigger** — click "Run Scan" to fetch fresh data on demand
+
+## Two complementary verdicts
+
+The scanner runs two parallel detection layers that answer different questions:
+
+**Risk regime — "Should I take risk OFF?"** Uses defensive composite, XLY/XLP momentum, SPY trend, VIX, and velocity divergence. Best at catching the start of multi-week drawdowns. Verdict: TAKE RISK OFF / CAUTION / NEUTRAL / RISK-ON CONFIRMED.
+
+**Capitulation watch — "Should I put risk back ON?"** Uses NYMO (McClellan Oscillator), TRIN (Arms Index), and CBOE Put/Call ratio. Best at catching washed-out market bottoms when fear is extreme. Verdict: BOUNCE SETUP / OVERSOLD / WATCH / NEUTRAL.
+
+The two signals are independent. When BOTH fire — risk regime says TAKE RISK OFF and capitulation says BOUNCE SETUP — that's the classic capitulation bottom setup. Sell-off is real, but exhaustion is confirmed.
 
 ## Risk regime signals (the four early-warning detectors)
 
@@ -123,10 +135,11 @@ node index.js            # run the scheduler
 
 ## Files
 
-- `sectorRotation.js` — core scanner (data fetch via Alpaca + VIX via Yahoo, RS math, alert pipeline)
+- `sectorRotation.js` — core scanner (data fetch via Alpaca + Yahoo, RS math, alert pipeline)
 - `riskRegime.js` — defensive composite, XLY/XLP gauge, SPY trend overlay, velocity divergence, master verdict
+- `capitulation.js` — NYMO, TRIN, CBOE Put/Call ratio, bounce-setup verdict
 - `regimeAdjustment.js` — static rule engine that maps rankings to SIGNAL sizing buckets
-- `aiRecap.js` — Claude API call for plain-English daily recap (optional, includes risk regime context)
+- `aiRecap.js` — Claude API call for plain-English daily recap (incorporates both risk regime and capitulation)
 - `index.js` — scheduler + HTTP server (dashboard, /api/latest, /run, /healthz)
 - `public/index.html` — single-page web dashboard (self-contained, no build step)
 - `package.json` — Node 18+, no dependencies (uses built-in `https`, `http`, `fs`)
