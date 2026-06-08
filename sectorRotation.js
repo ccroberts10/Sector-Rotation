@@ -157,66 +157,124 @@ async function fetchHistory(symbol, days = 100) {
 }
 
 // ---------------------------------------------------------------------------
-// VIX fetch via Yahoo Finance (free, no auth)
+// Index data fetch — Stooq primary, Yahoo fallback
 // ---------------------------------------------------------------------------
-// Alpaca doesn't serve the VIX index ($VIX / ^VIX) through its stocks endpoint
-// since it's an index, not an equity. Yahoo's chart API is free and reliable
-// for index data. We just need a single recent close.
+// Alpaca doesn't serve indices through its stocks endpoint. Stooq is a free
+// Polish financial data provider with rock-solid index coverage and no auth.
+// Yahoo has been progressively restricting programmatic access, so we use it
+// only as a fallback. Browser-like User-Agent helps avoid bot detection.
 
-function yahooGet(symbol) {
+const BROWSER_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+// Symbol mapping: scanner alias -> { stooq, yahoo }
+// Stooq strips the ^ and adds nothing for US indices (lowercased)
+// Yahoo uses the ^ prefix
+const INDEX_SYMBOLS = {
+  VIX:  { stooq: '^vix',  yahoo: '^VIX'  },
+  NYMO: { stooq: '^nymo', yahoo: '^NYMO' },
+  TRIN: { stooq: '^trin', yahoo: '^TRIN' },
+  CPC:  { stooq: '^cpc',  yahoo: '^CPC'  },
+};
+
+function httpsGet(opts) {
   return new Promise((resolve, reject) => {
-    const opts = {
-      hostname: 'query1.finance.yahoo.com',
-      path: `/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=3mo`,
-      method: 'GET',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; sector-rotation-scanner/1.0)',
-        Accept: 'application/json',
-      },
-    };
     const req = https.request(opts, (res) => {
       let body = '';
       res.on('data', (c) => (body += c));
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(body));
-        } catch (e) {
-          reject(new Error(`Yahoo parse error: ${e.message}`));
-        }
-      });
+      res.on('end', () => resolve({ statusCode: res.statusCode, body }));
     });
     req.on('error', reject);
     req.end();
   });
 }
 
-async function fetchYahooBars(symbol, label) {
-  try {
-    const res = await yahooGet(symbol);
-    const result = res?.chart?.result?.[0];
-    if (!result) throw new Error('No chart result');
-    const timestamps = result.timestamp || [];
-    const closes = result.indicators?.quote?.[0]?.close || [];
-    const bars = [];
-    for (let i = 0; i < timestamps.length; i++) {
-      if (closes[i] === null || closes[i] === undefined) continue;
-      bars.push({
-        date: new Date(timestamps[i] * 1000).toISOString().slice(0, 10),
-        close: parseFloat(closes[i]),
-      });
-    }
-    return bars;
-  } catch (e) {
-    console.warn(`${label || symbol} fetch failed:`, e.message);
+// --- Stooq: returns CSV like "Date,Open,High,Low,Close,Volume"
+async function fetchStooqBars(symbol) {
+  // Stooq daily CSV: https://stooq.com/q/d/l/?s=^vix&i=d
+  const opts = {
+    hostname: 'stooq.com',
+    path: `/q/d/l/?s=${encodeURIComponent(symbol)}&i=d`,
+    method: 'GET',
+    headers: { 'User-Agent': BROWSER_UA, Accept: 'text/csv,*/*' },
+  };
+  const { statusCode, body } = await httpsGet(opts);
+  if (statusCode !== 200) throw new Error(`Stooq HTTP ${statusCode}`);
+  if (!body || body.startsWith('No data')) throw new Error('Stooq: no data');
+
+  const lines = body.trim().split('\n');
+  if (lines.length < 2) throw new Error('Stooq: empty result');
+
+  // header: Date,Open,High,Low,Close,Volume
+  const bars = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(',');
+    if (cols.length < 5) continue;
+    const close = parseFloat(cols[4]);
+    if (isNaN(close)) continue;
+    bars.push({ date: cols[0], close });
+  }
+  if (bars.length === 0) throw new Error('Stooq: no valid bars');
+  return bars;
+}
+
+// --- Yahoo: returns JSON
+async function fetchYahooBars(symbol) {
+  const opts = {
+    hostname: 'query1.finance.yahoo.com',
+    path: `/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=3mo`,
+    method: 'GET',
+    headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
+  };
+  const { statusCode, body } = await httpsGet(opts);
+  if (statusCode !== 200) throw new Error(`Yahoo HTTP ${statusCode}`);
+  const parsed = JSON.parse(body);
+  const result = parsed?.chart?.result?.[0];
+  if (!result) throw new Error('Yahoo: no chart result');
+  const timestamps = result.timestamp || [];
+  const closes = result.indicators?.quote?.[0]?.close || [];
+  const bars = [];
+  for (let i = 0; i < timestamps.length; i++) {
+    if (closes[i] === null || closes[i] === undefined) continue;
+    bars.push({
+      date: new Date(timestamps[i] * 1000).toISOString().slice(0, 10),
+      close: parseFloat(closes[i]),
+    });
+  }
+  if (bars.length === 0) throw new Error('Yahoo: no valid bars');
+  return bars;
+}
+
+// --- Top-level: try Stooq, fall back to Yahoo
+async function fetchIndexBars(alias) {
+  const sym = INDEX_SYMBOLS[alias];
+  if (!sym) {
+    console.warn(`Unknown index alias: ${alias}`);
     return null;
+  }
+
+  try {
+    const bars = await fetchStooqBars(sym.stooq);
+    console.log(`  ${alias}: ${bars.length} bars from Stooq`);
+    return bars;
+  } catch (e1) {
+    console.warn(`  ${alias} Stooq failed: ${e1.message}`);
+    try {
+      const bars = await fetchYahooBars(sym.yahoo);
+      console.log(`  ${alias}: ${bars.length} bars from Yahoo (fallback)`);
+      return bars;
+    } catch (e2) {
+      console.warn(`  ${alias} Yahoo also failed: ${e2.message}`);
+      return null;
+    }
   }
 }
 
 // Convenience wrappers
-const fetchVix = () => fetchYahooBars('^VIX', 'VIX');
-const fetchNymo = () => fetchYahooBars('^NYMO', 'NYMO');
-const fetchTrin = () => fetchYahooBars('^TRIN', 'TRIN');
-const fetchCpc = () => fetchYahooBars('^CPC', 'CPC');
+const fetchVix = () => fetchIndexBars('VIX');
+const fetchNymo = () => fetchIndexBars('NYMO');
+const fetchTrin = () => fetchIndexBars('TRIN');
+const fetchCpc = () => fetchIndexBars('CPC');
 
 // ---------------------------------------------------------------------------
 // Math helpers
