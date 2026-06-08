@@ -960,35 +960,20 @@
         `;
       }
 
-      const nymo = capitulation.nymo;
-      const trin = capitulation.trin;
+      const vix = capitulation.vix;
       const cpc = capitulation.cpc;
+      const breadth = capitulation.breadth;
 
-      const nymoHTML = nymo ? `
+      const vixHTML = vix ? `
         <div class="risk-tile">
-          <div class="risk-tile-label">McClellan (NYMO)</div>
-          <div class="risk-tile-value ${nymo.fires ? 'good' : (nymo.signal === 'OVERBOUGHT' ? 'warn' : '')}">${nymo.value >= 0 ? '+' : ''}${nymo.value}</div>
-          <div class="risk-tile-sub">${nymo.signal}</div>
-          <div class="risk-tile-detail">&lt; -70 oversold · &lt; -100 extreme</div>
+          <div class="risk-tile-label">VIX</div>
+          <div class="risk-tile-value ${vix.fires ? 'good' : (vix.signal === 'COMPLACENCY' ? 'warn' : '')}">${vix.value}</div>
+          <div class="risk-tile-sub">${vix.signal}</div>
+          <div class="risk-tile-detail">&gt; 25 fear · &gt; 30 panic${vix.avg5 !== null ? ` · 5d avg ${vix.avg5}` : ''}</div>
         </div>
       ` : `
         <div class="risk-tile">
-          <div class="risk-tile-label">McClellan (NYMO)</div>
-          <div class="risk-tile-value" style="color:var(--text-faint)">—</div>
-          <div class="risk-tile-sub">unavailable</div>
-        </div>
-      `;
-
-      const trinHTML = trin ? `
-        <div class="risk-tile">
-          <div class="risk-tile-label">TRIN (Arms)</div>
-          <div class="risk-tile-value ${trin.fires ? 'good' : ''}">${trin.value}</div>
-          <div class="risk-tile-sub">${trin.signal}</div>
-          <div class="risk-tile-detail">&gt; 2.0 capitulation · &gt; 3.0 panic</div>
-        </div>
-      ` : `
-        <div class="risk-tile">
-          <div class="risk-tile-label">TRIN (Arms)</div>
+          <div class="risk-tile-label">VIX</div>
           <div class="risk-tile-value" style="color:var(--text-faint)">—</div>
           <div class="risk-tile-sub">unavailable</div>
         </div>
@@ -1009,6 +994,21 @@
         </div>
       `;
 
+      const breadthHTML = breadth ? `
+        <div class="risk-tile">
+          <div class="risk-tile-label">Sector breadth</div>
+          <div class="risk-tile-value ${breadth.fires ? 'good' : (breadth.signal === 'STRONG BREADTH' ? 'warn' : '')}">${breadth.below}/${breadth.total}</div>
+          <div class="risk-tile-sub">${breadth.signal} · below 20DMA</div>
+          <div class="risk-tile-detail">${breadth.below >= 7 ? breadth.tickersBelow.join(' · ') : '&ge; 9 oversold · 11 washout'}</div>
+        </div>
+      ` : `
+        <div class="risk-tile">
+          <div class="risk-tile-label">Sector breadth</div>
+          <div class="risk-tile-value" style="color:var(--text-faint)">—</div>
+          <div class="risk-tile-sub">unavailable</div>
+        </div>
+      `;
+
       capPanelHTML = `
         <section class="card cap-panel">
           <div class="card-header">
@@ -1016,9 +1016,9 @@
             <span class="card-sub">Verdict · ${cv.verdict || 'NEUTRAL'} · score ${cv.score ?? 0} · ${(cv.firing || []).length}/3 firing</span>
           </div>
           <div class="risk-grid risk-grid-3">
-            ${nymoHTML}
-            ${trinHTML}
+            ${vixHTML}
             ${cpcHTML}
+            ${breadthHTML}
           </div>
         </section>
       `;
