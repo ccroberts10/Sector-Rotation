@@ -981,14 +981,14 @@
 
       const cpcHTML = cpc ? `
         <div class="risk-tile">
-          <div class="risk-tile-label">Put/Call ratio</div>
+          <div class="risk-tile-label">VIX / VXV ratio</div>
           <div class="risk-tile-value ${cpc.fires ? 'good' : (cpc.signal === 'COMPLACENCY' ? 'warn' : '')}">${cpc.value}</div>
           <div class="risk-tile-sub">${cpc.signal}</div>
-          <div class="risk-tile-detail">&gt; 1.0 fear · &gt; 1.2 extreme${cpc.avg5 !== null ? ` · 5d avg ${cpc.avg5}` : ''}</div>
+          <div class="risk-tile-detail">&gt; 1.00 inverted · &gt; 1.10 strong fear${cpc.avg5 !== null ? ` · 5d avg ${cpc.avg5}` : ''}</div>
         </div>
       ` : `
         <div class="risk-tile">
-          <div class="risk-tile-label">Put/Call ratio</div>
+          <div class="risk-tile-label">VIX / VXV ratio</div>
           <div class="risk-tile-value" style="color:var(--text-faint)">—</div>
           <div class="risk-tile-sub">unavailable</div>
         </div>
