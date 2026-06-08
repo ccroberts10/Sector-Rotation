@@ -157,25 +157,16 @@ async function fetchHistory(symbol, days = 100) {
 }
 
 // ---------------------------------------------------------------------------
-// Index data fetch — Stooq primary, Yahoo fallback
+// Index data fetch — VIX from Yahoo (was working), CPC from CBOE direct
 // ---------------------------------------------------------------------------
-// Alpaca doesn't serve indices through its stocks endpoint. Stooq is a free
-// Polish financial data provider with rock-solid index coverage and no auth.
-// Yahoo has been progressively restricting programmatic access, so we use it
-// only as a fallback. Browser-like User-Agent helps avoid bot detection.
+// Alpaca doesn't serve indices. Tried Stooq/Yahoo for breadth indices (NYMO,
+// TRIN) but both are unreliable for those. New approach:
+//   - VIX from Yahoo (worked previously)
+//   - CPC from CBOE's own daily CSV — direct from the source, no auth
+//   - Sector breadth computed from sector data we already have (no extra fetch)
 
 const BROWSER_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
-// Symbol mapping: scanner alias -> { stooq, yahoo }
-// Stooq strips the ^ and adds nothing for US indices (lowercased)
-// Yahoo uses the ^ prefix
-const INDEX_SYMBOLS = {
-  VIX:  { stooq: '^vix',  yahoo: '^VIX'  },
-  NYMO: { stooq: '^nymo', yahoo: '^NYMO' },
-  TRIN: { stooq: '^trin', yahoo: '^TRIN' },
-  CPC:  { stooq: '^cpc',  yahoo: '^CPC'  },
-};
 
 function httpsGet(opts) {
   return new Promise((resolve, reject) => {
@@ -189,92 +180,145 @@ function httpsGet(opts) {
   });
 }
 
-// --- Stooq: returns CSV like "Date,Open,High,Low,Close,Volume"
-async function fetchStooqBars(symbol) {
-  // Stooq daily CSV: https://stooq.com/q/d/l/?s=^vix&i=d
-  const opts = {
-    hostname: 'stooq.com',
-    path: `/q/d/l/?s=${encodeURIComponent(symbol)}&i=d`,
-    method: 'GET',
-    headers: { 'User-Agent': BROWSER_UA, Accept: 'text/csv,*/*' },
-  };
-  const { statusCode, body } = await httpsGet(opts);
-  if (statusCode !== 200) throw new Error(`Stooq HTTP ${statusCode}`);
-  if (!body || body.startsWith('No data')) throw new Error('Stooq: no data');
-
-  const lines = body.trim().split('\n');
-  if (lines.length < 2) throw new Error('Stooq: empty result');
-
-  // header: Date,Open,High,Low,Close,Volume
-  const bars = [];
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(',');
-    if (cols.length < 5) continue;
-    const close = parseFloat(cols[4]);
-    if (isNaN(close)) continue;
-    bars.push({ date: cols[0], close });
-  }
-  if (bars.length === 0) throw new Error('Stooq: no valid bars');
-  return bars;
-}
-
-// --- Yahoo: returns JSON
-async function fetchYahooBars(symbol) {
-  const opts = {
-    hostname: 'query1.finance.yahoo.com',
-    path: `/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=3mo`,
-    method: 'GET',
-    headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
-  };
-  const { statusCode, body } = await httpsGet(opts);
-  if (statusCode !== 200) throw new Error(`Yahoo HTTP ${statusCode}`);
-  const parsed = JSON.parse(body);
-  const result = parsed?.chart?.result?.[0];
-  if (!result) throw new Error('Yahoo: no chart result');
-  const timestamps = result.timestamp || [];
-  const closes = result.indicators?.quote?.[0]?.close || [];
-  const bars = [];
-  for (let i = 0; i < timestamps.length; i++) {
-    if (closes[i] === null || closes[i] === undefined) continue;
-    bars.push({
-      date: new Date(timestamps[i] * 1000).toISOString().slice(0, 10),
-      close: parseFloat(closes[i]),
-    });
-  }
-  if (bars.length === 0) throw new Error('Yahoo: no valid bars');
-  return bars;
-}
-
-// --- Top-level: try Stooq, fall back to Yahoo
-async function fetchIndexBars(alias) {
-  const sym = INDEX_SYMBOLS[alias];
-  if (!sym) {
-    console.warn(`Unknown index alias: ${alias}`);
+// --- VIX from Yahoo Finance
+async function fetchVix() {
+  try {
+    const opts = {
+      hostname: 'query1.finance.yahoo.com',
+      path: `/v8/finance/chart/${encodeURIComponent('^VIX')}?interval=1d&range=3mo`,
+      method: 'GET',
+      headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
+    };
+    const { statusCode, body } = await httpsGet(opts);
+    if (statusCode !== 200) throw new Error(`HTTP ${statusCode}`);
+    const parsed = JSON.parse(body);
+    const result = parsed?.chart?.result?.[0];
+    if (!result) throw new Error('No chart result');
+    const timestamps = result.timestamp || [];
+    const closes = result.indicators?.quote?.[0]?.close || [];
+    const bars = [];
+    for (let i = 0; i < timestamps.length; i++) {
+      if (closes[i] === null || closes[i] === undefined) continue;
+      bars.push({
+        date: new Date(timestamps[i] * 1000).toISOString().slice(0, 10),
+        close: parseFloat(closes[i]),
+      });
+    }
+    if (bars.length === 0) throw new Error('No valid bars');
+    console.log(`  VIX: ${bars.length} bars from Yahoo`);
+    return bars;
+  } catch (e) {
+    console.warn(`  VIX fetch failed: ${e.message || '(empty error)'}`);
     return null;
   }
-
-  try {
-    const bars = await fetchStooqBars(sym.stooq);
-    console.log(`  ${alias}: ${bars.length} bars from Stooq`);
-    return bars;
-  } catch (e1) {
-    console.warn(`  ${alias} Stooq failed: ${e1.message}`);
-    try {
-      const bars = await fetchYahooBars(sym.yahoo);
-      console.log(`  ${alias}: ${bars.length} bars from Yahoo (fallback)`);
-      return bars;
-    } catch (e2) {
-      console.warn(`  ${alias} Yahoo also failed: ${e2.message}`);
-      return null;
-    }
-  }
 }
 
-// Convenience wrappers
-const fetchVix = () => fetchIndexBars('VIX');
-const fetchNymo = () => fetchIndexBars('NYMO');
-const fetchTrin = () => fetchIndexBars('TRIN');
-const fetchCpc = () => fetchIndexBars('CPC');
+// --- CBOE Put/Call ratio from CBOE direct
+// CBOE publishes a daily totals CSV. The "Total Put/Call Ratio" is the
+// equivalent of the ^CPC index. URL pattern:
+// https://cdn.cboe.com/api/global/us_indices/daily_prices/PUTCALL_History.csv
+async function fetchCpc() {
+  // CBOE provides a stable URL for the historical PUTCALL data
+  const urls = [
+    // Primary: CBOE's daily put/call CSV
+    {
+      host: 'cdn.cboe.com',
+      path: '/api/global/us_indices/daily_prices/PUTCALL_History.csv',
+    },
+    // Alternative path that CBOE has used
+    {
+      host: 'www.cboe.com',
+      path: '/us/options/market_statistics/daily/',
+    },
+  ];
+
+  for (const u of urls) {
+    try {
+      const opts = {
+        hostname: u.host,
+        path: u.path,
+        method: 'GET',
+        headers: {
+          'User-Agent': BROWSER_UA,
+          Accept: 'text/csv,application/csv,text/plain,*/*',
+        },
+      };
+      const { statusCode, body } = await httpsGet(opts);
+      if (statusCode !== 200) {
+        console.warn(`  CPC ${u.host}: HTTP ${statusCode}`);
+        continue;
+      }
+      if (!body || body.length < 50) {
+        console.warn(`  CPC ${u.host}: empty body`);
+        continue;
+      }
+
+      // Parse the CSV. Format varies but typically:
+      // DATE,CALL,PUT,TOTAL,P/C Ratio
+      const lines = body.trim().split(/\r?\n/);
+      if (lines.length < 2) {
+        console.warn(`  CPC ${u.host}: too few lines`);
+        continue;
+      }
+
+      // Find header row — CBOE puts some preamble before the actual headers
+      let headerIdx = -1;
+      for (let i = 0; i < Math.min(10, lines.length); i++) {
+        const lower = lines[i].toLowerCase();
+        if (lower.includes('date') && (lower.includes('p/c') || lower.includes('ratio'))) {
+          headerIdx = i;
+          break;
+        }
+      }
+      if (headerIdx === -1) {
+        console.warn(`  CPC ${u.host}: no header row found`);
+        continue;
+      }
+
+      const header = lines[headerIdx].toLowerCase().split(',');
+      const dateCol = header.findIndex((h) => h.trim() === 'date');
+      const ratioCol = header.findIndex((h) =>
+        h.trim().includes('p/c') || h.trim().includes('ratio') || h.trim().includes('total')
+      );
+
+      if (dateCol === -1 || ratioCol === -1) {
+        console.warn(`  CPC ${u.host}: missing date/ratio columns`);
+        continue;
+      }
+
+      const bars = [];
+      for (let i = headerIdx + 1; i < lines.length; i++) {
+        const cols = lines[i].split(',');
+        if (cols.length <= Math.max(dateCol, ratioCol)) continue;
+        const dateRaw = cols[dateCol].trim();
+        const ratio = parseFloat(cols[ratioCol]);
+        if (isNaN(ratio) || ratio <= 0 || ratio > 5) continue;
+        // Normalize date — CBOE uses MM/DD/YYYY or YYYY-MM-DD
+        let date = dateRaw;
+        if (dateRaw.includes('/')) {
+          const [m, d, y] = dateRaw.split('/');
+          date = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+        }
+        bars.push({ date, close: ratio });
+      }
+
+      // Sort ascending by date
+      bars.sort((a, b) => a.date.localeCompare(b.date));
+
+      if (bars.length === 0) {
+        console.warn(`  CPC ${u.host}: no valid rows`);
+        continue;
+      }
+
+      console.log(`  CPC: ${bars.length} bars from ${u.host}`);
+      return bars;
+    } catch (e) {
+      console.warn(`  CPC ${u.host} error: ${e.message || '(empty)'}`);
+    }
+  }
+
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Math helpers
@@ -416,23 +460,17 @@ async function run() {
     }
   }
 
-  // Fetch VIX + breadth indicators from Yahoo (free, no auth) — parallel
-  console.log('Fetching VIX + capitulation indicators...');
-  const [vix, nymo, trin, cpc] = await Promise.all([
+  // Fetch VIX + CPC (NYMO/TRIN replaced with sector breadth from existing data)
+  console.log('Fetching VIX + CPC...');
+  const [vix, cpc] = await Promise.all([
     fetchVix(),
-    fetchNymo(),
-    fetchTrin(),
     fetchCpc(),
   ]);
   data.VIX = vix;
-  data.NYMO = nymo;
-  data.TRIN = trin;
   data.CPC = cpc;
 
   if (data.VIX) console.log(`VIX last close: ${data.VIX[data.VIX.length - 1]?.close?.toFixed(2)}`);
-  if (data.NYMO) console.log(`NYMO: ${data.NYMO[data.NYMO.length - 1]?.close?.toFixed(2)}`);
-  if (data.TRIN) console.log(`TRIN: ${data.TRIN[data.TRIN.length - 1]?.close?.toFixed(2)}`);
-  if (data.CPC) console.log(`CPC: ${data.CPC[data.CPC.length - 1]?.close?.toFixed(2)}`);
+  if (data.CPC) console.log(`CPC last close: ${data.CPC[data.CPC.length - 1]?.close?.toFixed(2)}`);
 
   const spy = data[BENCHMARK];
   if (!spy) throw new Error('No SPY data — cannot compute relative strength.');
@@ -529,8 +567,8 @@ async function run() {
   // --- Risk regime overlay (defensive composite, XLY/XLP, SPY trend, VIX, velocity) ---
   const riskRegime = buildRiskRegime(rows, data);
 
-  // --- Capitulation watch (NYMO, TRIN, CPC) ---
-  const capitulation = buildCapitulation(data);
+  // --- Capitulation watch (VIX, CPC, sector breadth) ---
+  const capitulation = buildCapitulation(data, Object.keys(SECTOR_ETFS));
 
   // Append a compact risk read to the message
   msg += '\nRISK REGIME\n------------------------------------\n';
@@ -558,14 +596,14 @@ async function run() {
   // Append capitulation read
   msg += '\nCAPITULATION WATCH\n------------------------------------\n';
   msg += `Verdict: ${capitulation.verdict.verdict} (score ${capitulation.verdict.score})\n`;
-  if (capitulation.nymo) {
-    msg += `NYMO: ${capitulation.nymo.value} — ${capitulation.nymo.signal}\n`;
-  }
-  if (capitulation.trin) {
-    msg += `TRIN: ${capitulation.trin.value} — ${capitulation.trin.signal}\n`;
+  if (capitulation.vix) {
+    msg += `VIX: ${capitulation.vix.value} — ${capitulation.vix.signal}\n`;
   }
   if (capitulation.cpc) {
     msg += `P/C Ratio: ${capitulation.cpc.value} — ${capitulation.cpc.signal}\n`;
+  }
+  if (capitulation.breadth) {
+    msg += `Sector breadth: ${capitulation.breadth.below}/${capitulation.breadth.total} below 20DMA — ${capitulation.breadth.signal}\n`;
   }
   if (capitulation.verdict.reasons.length) {
     msg += `Why: ${capitulation.verdict.reasons.join('; ')}\n`;
