@@ -1,127 +1,88 @@
 // capitulation.js
-// Layer of "is the market washed out and ready to bounce" detection.
-// Complementary to riskRegime — that one tells you when to take risk OFF,
-// this one tells you when oversold conditions suggest putting risk back ON.
+// Detects when markets are washed out and bounce-prone. Complementary to
+// riskRegime (which catches risk-off). Uses three reliable signals:
 //
-// Three signals, all free via Yahoo Finance:
-//   1. McClellan Oscillator (^NYMO): NYSE breadth oscillator
-//   2. TRIN / Arms Index (^TRIN): up/down volume ratio
-//   3. Put/Call Ratio (^CPC): CBOE total put/call
+//   1. VIX level — fear gauge, already fetched in main scanner
+//   2. CBOE Put/Call ratio — fetched direct from CBOE daily CSV
+//   3. Sector breadth — % of the 11 SPDR sector ETFs below their own 20DMA
+//      (computed from data already fetched by main scanner — no extra calls)
 //
 // Composite "capitulation score" fires when 2 of 3 are in extreme territory.
-
-const CAPITULATION_TICKERS = ['^NYMO', '^TRIN', '^CPC'];
 
 function lastClose(bars) {
   if (!bars || bars.length === 0) return null;
   return bars[bars.length - 1].close;
 }
 
-function pctChange(bars, lookback) {
-  if (!bars || bars.length < lookback + 1) return null;
-  const now = bars[bars.length - 1].close;
-  const then = bars[bars.length - 1 - lookback].close;
-  if (!then) return null;
-  return ((now - then) / then) * 100;
+function sma(bars, n) {
+  if (!bars || bars.length < n) return null;
+  const slice = bars.slice(-n);
+  const sum = slice.reduce((a, b) => a + b.close, 0);
+  return sum / n;
 }
 
 // ---------------------------------------------------------------------------
-// Signal 1: McClellan Oscillator (NYMO)
+// Signal 1: VIX
 // ---------------------------------------------------------------------------
-// Range typically -150 to +150. Negative = breadth deteriorating.
-//   > +70  = overbought (counterintuitively often precedes pullbacks)
-//   < -70  = oversold, bounce-prone
-//   < -100 = extreme oversold, capitulation territory
-//   < -130 = panic / historic washout
+// Standalone VIX extremes act as capitulation signals:
+//   < 15  = complacency
+//   15-20 = calm
+//   20-25 = elevated
+//   25-30 = fear
+//   30+   = panic / capitulation territory
+//   35+   = historic washout
 
-function nymoRead(bars) {
+function vixRead(bars) {
   if (!bars || bars.length === 0) return null;
   const value = lastClose(bars);
   if (value === null) return null;
 
-  let signal = 'NEUTRAL';
+  const avg5 = bars.length >= 5
+    ? bars.slice(-5).reduce((a, b) => a + b.close, 0) / 5
+    : null;
+
+  let signal = 'CALM';
   let fires = false;
-  if (value < -130) {
-    signal = 'PANIC WASHOUT';
+  if (value >= 35) {
+    signal = 'HISTORIC WASHOUT';
     fires = true;
-  } else if (value < -100) {
-    signal = 'EXTREME OVERSOLD';
+  } else if (value >= 30) {
+    signal = 'PANIC';
     fires = true;
-  } else if (value < -70) {
-    signal = 'OVERSOLD';
+  } else if (value >= 25) {
+    signal = 'FEAR';
     fires = true;
-  } else if (value > 70) {
-    signal = 'OVERBOUGHT';
-  } else if (value > 30) {
-    signal = 'STRONG BREADTH';
+  } else if (value >= 20) {
+    signal = 'ELEVATED';
+  } else if (value < 15) {
+    signal = 'COMPLACENCY';
   }
 
   return {
     value: parseFloat(value.toFixed(2)),
+    avg5: avg5 !== null ? parseFloat(avg5.toFixed(2)) : null,
     signal,
     fires,
   };
 }
 
 // ---------------------------------------------------------------------------
-// Signal 2: TRIN (Arms Index)
+// Signal 2: CBOE Put/Call ratio
 // ---------------------------------------------------------------------------
-// TRIN = (advancing issues / declining issues) / (advancing volume / declining volume)
-//   < 0.5  = strong buying
-//   0.8-1.2 = neutral
-//   > 1.5  = elevated selling
-//   > 2.0  = capitulation
-//   > 3.0  = panic selling
-// NB: A high TRIN intraday but with strong rally suggests strong stocks getting bought
-// hard — for daily close interpretation, > 2.0 = washout signal.
-
-function trinRead(bars) {
-  if (!bars || bars.length === 0) return null;
-  const value = lastClose(bars);
-  if (value === null) return null;
-
-  let signal = 'NEUTRAL';
-  let fires = false;
-  if (value > 3.0) {
-    signal = 'PANIC SELLING';
-    fires = true;
-  } else if (value > 2.0) {
-    signal = 'CAPITULATION';
-    fires = true;
-  } else if (value > 1.5) {
-    signal = 'ELEVATED SELLING';
-  } else if (value < 0.5) {
-    signal = 'STRONG BUYING';
-  }
-
-  return {
-    value: parseFloat(value.toFixed(2)),
-    signal,
-    fires,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Signal 3: CBOE Put/Call Ratio (CPC)
-// ---------------------------------------------------------------------------
-// Total put/call ratio across CBOE.
 //   < 0.7  = complacency
 //   0.7-0.9 = normal
-//   > 1.0  = elevated fear, contrarian bullish
-//   > 1.2  = extreme fear, strong contrarian signal
-//   > 1.4  = panic, historic bounce zone
+//   > 1.0  = elevated fear
+//   > 1.2  = extreme fear
+//   > 1.4  = panic
 
 function cpcRead(bars) {
   if (!bars || bars.length === 0) return null;
   const value = lastClose(bars);
   if (value === null) return null;
 
-  // 5-day average smooths out daily noise — useful confirmation
-  let avg5 = null;
-  if (bars.length >= 5) {
-    const recent = bars.slice(-5);
-    avg5 = recent.reduce((a, b) => a + b.close, 0) / 5;
-  }
+  const avg5 = bars.length >= 5
+    ? bars.slice(-5).reduce((a, b) => a + b.close, 0) / 5
+    : null;
 
   let signal = 'NEUTRAL';
   let fires = false;
@@ -147,37 +108,97 @@ function cpcRead(bars) {
 }
 
 // ---------------------------------------------------------------------------
-// Master capitulation verdict
+// Signal 3: Sector Breadth — computed from data already fetched
+// ---------------------------------------------------------------------------
+// Counts how many of the 11 SPDR sector ETFs are below their own 20DMA.
+// When the broad market is selling off, most/all sectors break their 20DMA
+// simultaneously. Functionally similar to NYMO (NYSE breadth deteriorating)
+// but uses sector-level data we already have. Arguably MORE relevant than
+// NYMO for a sector-rotation-driven trading approach.
+//
+//   <= 3/11 below = strong breadth, complacent
+//    4-6/11      = neutral
+//    7-8/11      = weak breadth (early warning)
+//    9-10/11     = oversold (bounce-prone)
+//      11/11     = full washout
+
+function sectorBreadthRead(sectorData, sectorTickers) {
+  if (!sectorData || !sectorTickers || sectorTickers.length === 0) return null;
+
+  let below = 0;
+  let above = 0;
+  const tickersBelow = [];
+  const tickersAbove = [];
+
+  for (const ticker of sectorTickers) {
+    const bars = sectorData[ticker];
+    if (!bars || bars.length < 20) continue;
+
+    const price = lastClose(bars);
+    const ma20 = sma(bars, 20);
+    if (price === null || ma20 === null) continue;
+
+    if (price < ma20) {
+      below++;
+      tickersBelow.push(ticker);
+    } else {
+      above++;
+      tickersAbove.push(ticker);
+    }
+  }
+
+  const total = below + above;
+  if (total === 0) return null;
+
+  const pctBelow = (below / total) * 100;
+
+  let signal = 'NEUTRAL';
+  let fires = false;
+  if (below === total && total >= 10) {
+    signal = 'FULL WASHOUT';
+    fires = true;
+  } else if (below >= 9) {
+    signal = 'OVERSOLD';
+    fires = true;
+  } else if (below >= 7) {
+    signal = 'WEAK BREADTH';
+  } else if (below <= 3) {
+    signal = 'STRONG BREADTH';
+  }
+
+  return {
+    below,
+    above,
+    total,
+    pctBelow: parseFloat(pctBelow.toFixed(1)),
+    tickersBelow,
+    tickersAbove,
+    signal,
+    fires,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Master verdict
 // ---------------------------------------------------------------------------
 
 function capitulationVerdict(parts) {
-  const { nymo, trin, cpc } = parts;
+  const { vix, cpc, breadth } = parts;
   const firing = [];
   let score = 0;
   const reasons = [];
 
-  if (nymo?.fires) {
-    firing.push('NYMO');
-    if (nymo.signal === 'PANIC WASHOUT') {
+  if (vix?.fires) {
+    firing.push('VIX');
+    if (vix.signal === 'HISTORIC WASHOUT') {
       score += 3;
-      reasons.push(`NYMO ${nymo.value} — historic washout`);
-    } else if (nymo.signal === 'EXTREME OVERSOLD') {
-      score += 2;
-      reasons.push(`NYMO ${nymo.value} — extreme oversold`);
-    } else {
-      score += 1;
-      reasons.push(`NYMO ${nymo.value} — oversold`);
-    }
-  }
-
-  if (trin?.fires) {
-    firing.push('TRIN');
-    if (trin.signal === 'PANIC SELLING') {
+      reasons.push(`VIX ${vix.value} — historic washout`);
+    } else if (vix.signal === 'PANIC') {
       score += 3;
-      reasons.push(`TRIN ${trin.value} — panic selling`);
-    } else if (trin.signal === 'CAPITULATION') {
+      reasons.push(`VIX ${vix.value} — panic`);
+    } else if (vix.signal === 'FEAR') {
       score += 2;
-      reasons.push(`TRIN ${trin.value} — capitulation`);
+      reasons.push(`VIX ${vix.value} — fear`);
     }
   }
 
@@ -195,39 +216,41 @@ function capitulationVerdict(parts) {
     }
   }
 
-  // Verdict thresholds:
-  //   score >= 6 = high-conviction bounce setup (2+ extreme signals or 3 elevated)
-  //   score >= 4 = bounce-prone, multiple signals firing
-  //   score >= 2 = early warning of oversold conditions
+  if (breadth?.fires) {
+    firing.push('BREADTH');
+    if (breadth.signal === 'FULL WASHOUT') {
+      score += 3;
+      reasons.push(`All ${breadth.total} sectors below 20DMA — full washout`);
+    } else {
+      score += 2;
+      reasons.push(`${breadth.below}/${breadth.total} sectors below 20DMA — oversold`);
+    }
+  }
+
   let verdict = 'NEUTRAL';
   if (score >= 6) verdict = 'BOUNCE SETUP';
   else if (score >= 4) verdict = 'OVERSOLD';
   else if (score >= 2) verdict = 'WATCH';
 
-  return {
-    verdict,
-    score,
-    firing,
-    reasons,
-  };
+  return { verdict, score, firing, reasons };
 }
 
 // ---------------------------------------------------------------------------
 // Top-level
 // ---------------------------------------------------------------------------
 
-function buildCapitulation(data) {
-  const nymo = nymoRead(data.NYMO);
-  const trin = trinRead(data.TRIN);
+function buildCapitulation(data, sectorTickers) {
+  const vix = vixRead(data.VIX);
   const cpc = cpcRead(data.CPC);
-  const verdict = capitulationVerdict({ nymo, trin, cpc });
+  const breadth = sectorBreadthRead(data, sectorTickers);
+  const verdict = capitulationVerdict({ vix, cpc, breadth });
 
   return {
-    nymo,
-    trin,
+    vix,
     cpc,
+    breadth,
     verdict,
   };
 }
 
-module.exports = { buildCapitulation, CAPITULATION_TICKERS };
+module.exports = { buildCapitulation };
