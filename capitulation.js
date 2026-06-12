@@ -1,13 +1,18 @@
 // capitulation.js
 // Detects when markets are washed out and bounce-prone. Complementary to
-// riskRegime (which catches risk-off). Uses three reliable signals:
+// riskRegime (which catches risk-off). Uses four reliable signals:
 //
-//   1. VIX level — fear gauge, already fetched in main scanner
-//   2. CBOE Put/Call ratio — fetched direct from CBOE daily CSV
-//   3. Sector breadth — % of the 11 SPDR sector ETFs below their own 20DMA
-//      (computed from data already fetched by main scanner — no extra calls)
+//   1. VIX level — fear gauge from FRED
+//   2. VIX/VXV ratio — term-structure fear gauge (replaces unreliable Put/Call)
+//   3. Sector breadth — % of 11 SPDR sector ETFs below their own 20DMA
+//   4. ABV pressure — 10-day SMA of up-volume/down-volume across sector ETFs
+//      (homegrown analog to Worden's T2101 ABI indicator)
 //
-// Composite "capitulation score" fires when 2 of 3 are in extreme territory.
+// All four computed from data the main scanner already fetches. No new APIs.
+// Composite "capitulation score" with verdict thresholds:
+//   score >= 7 = BOUNCE SETUP (high-conviction bounce zone)
+//   score >= 4 = OVERSOLD (multiple signals firing, watch closely)
+//   score >= 2 = WATCH (early warning)
 
 function lastClose(bars) {
   if (!bars || bars.length === 0) return null;
@@ -182,11 +187,114 @@ function sectorBreadthRead(sectorData, sectorTickers) {
 }
 
 // ---------------------------------------------------------------------------
+// Signal 4: ABV Pressure (Advance-Decline Volume, ABI-equivalent)
+// ---------------------------------------------------------------------------
+// Functional equivalent of Worden's T2101 ABI built from data we already
+// fetch. The original ABI is a 10-day SMA of NYSE up-volume / down-volume,
+// signaling exhaustion when it drops below ~13. We do the same thing on the
+// SPDR sector ETF universe + SPY:
+//
+//   For each day in the lookback window:
+//     - Each ETF with close > prior close contributes its volume to "up"
+//     - Each ETF with close < prior close contributes its volume to "down"
+//     - Daily ratio = up_volume / down_volume
+//   Smooth with a 10-day SMA, compare to thresholds.
+//
+// Different absolute scale than ABI because the universe is smaller, but
+// captures the same mechanism — sustained down-volume dominance = exhaustion.
+//
+// Thresholds (10-day SMA of ratio):
+//   < 0.40 = washout (extreme — analog to ABI < 11)
+//   < 0.55 = signal firing (analog to ABI < 13)
+//   < 0.75 = weak pressure (early warning)
+//    >2.5 = strong buying pressure (potential overheating)
+
+function abvPressureRead(data, tickers, smaWindow = 10) {
+  if (!data || !tickers || tickers.length === 0) return null;
+
+  // Build per-ETF aligned series with prior-close marker
+  // Index data by date for fast cross-ETF alignment
+  const allDates = new Set();
+  const byTicker = {};
+
+  for (const t of tickers) {
+    const bars = data[t];
+    if (!bars || bars.length < 2) continue;
+    byTicker[t] = {};
+    for (let i = 1; i < bars.length; i++) {
+      const b = bars[i];
+      const prev = bars[i - 1];
+      if (!b.volume || !prev || !prev.close) continue;
+      const change = b.close - prev.close;
+      byTicker[t][b.date] = { volume: b.volume, change };
+      allDates.add(b.date);
+    }
+  }
+
+  // Sort dates ascending
+  const sortedDates = Array.from(allDates).sort();
+  if (sortedDates.length < smaWindow + 1) return null;
+
+  // For each date, compute up/down volume across the universe
+  const dailyRatios = [];
+  for (const date of sortedDates) {
+    let upVol = 0;
+    let downVol = 0;
+    for (const t of tickers) {
+      const day = byTicker[t]?.[date];
+      if (!day) continue;
+      if (day.change > 0) upVol += day.volume;
+      else if (day.change < 0) downVol += day.volume;
+      // flat days don't contribute
+    }
+    if (downVol > 0) {
+      dailyRatios.push({ date, ratio: upVol / downVol });
+    } else if (upVol > 0) {
+      // All-up day, no down-volume — cap ratio at a high value to avoid Infinity
+      dailyRatios.push({ date, ratio: 10 });
+    }
+  }
+
+  if (dailyRatios.length < smaWindow) return null;
+
+  // 10-day SMA of the ratios
+  const recent = dailyRatios.slice(-smaWindow);
+  const sma10 = recent.reduce((sum, r) => sum + r.ratio, 0) / smaWindow;
+
+  // Also grab the latest daily ratio for context
+  const latestDaily = dailyRatios[dailyRatios.length - 1].ratio;
+
+  // Classification
+  let signal = 'NEUTRAL';
+  let fires = false;
+  if (sma10 < 0.40) {
+    signal = 'WASHOUT';
+    fires = true;
+  } else if (sma10 < 0.55) {
+    signal = 'EXHAUSTED SELLING';
+    fires = true;
+  } else if (sma10 < 0.75) {
+    signal = 'WEAK PRESSURE';
+  } else if (sma10 > 2.5) {
+    signal = 'STRONG BUYING';
+  }
+
+  return {
+    sma10: parseFloat(sma10.toFixed(3)),
+    latestDaily: parseFloat(latestDaily.toFixed(3)),
+    windowDays: smaWindow,
+    universe: tickers.length,
+    signal,
+    fires,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Master verdict
 // ---------------------------------------------------------------------------
 
 function capitulationVerdict(parts) {
-  const { vix, cpc, breadth } = parts;
+  const { vix, cpc, breadth, abv } = parts;
   const firing = [];
   let score = 0;
   const reasons = [];
@@ -230,8 +338,21 @@ function capitulationVerdict(parts) {
     }
   }
 
+  if (abv?.fires) {
+    firing.push('ABV');
+    if (abv.signal === 'WASHOUT') {
+      score += 3;
+      reasons.push(`ABV 10d ${abv.sma10} — volume washout`);
+    } else if (abv.signal === 'EXHAUSTED SELLING') {
+      score += 2;
+      reasons.push(`ABV 10d ${abv.sma10} — exhausted selling`);
+    }
+  }
+
+  // Verdict thresholds — recalibrated for 4 signals max
+  // Max possible score with all four firing extreme: 3+3+3+3 = 12
   let verdict = 'NEUTRAL';
-  if (score >= 6) verdict = 'BOUNCE SETUP';
+  if (score >= 7) verdict = 'BOUNCE SETUP';
   else if (score >= 4) verdict = 'OVERSOLD';
   else if (score >= 2) verdict = 'WATCH';
 
@@ -246,12 +367,16 @@ function buildCapitulation(data, sectorTickers) {
   const vix = vixRead(data.VIX);
   const cpc = cpcRead(data.CPC);
   const breadth = sectorBreadthRead(data, sectorTickers);
-  const verdict = capitulationVerdict({ vix, cpc, breadth });
+  // ABV runs on sector ETFs + SPY for broader volume coverage
+  const abvTickers = sectorTickers.includes('SPY') ? sectorTickers : ['SPY', ...sectorTickers];
+  const abv = abvPressureRead(data, abvTickers);
+  const verdict = capitulationVerdict({ vix, cpc, breadth, abv });
 
   return {
     vix,
     cpc,
     breadth,
+    abv,
     verdict,
   };
 }
