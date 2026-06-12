@@ -1009,16 +1009,33 @@
         </div>
       `;
 
+      const abv = capitulation.abv;
+      const abvHTML = abv ? `
+        <div class="risk-tile">
+          <div class="risk-tile-label">ABV pressure (10d)</div>
+          <div class="risk-tile-value ${abv.fires ? 'good' : (abv.signal === 'STRONG BUYING' ? 'warn' : '')}">${abv.sma10}</div>
+          <div class="risk-tile-sub">${abv.signal}</div>
+          <div class="risk-tile-detail">up/down vol · &lt; 0.55 exhausted · &lt; 0.40 washout</div>
+        </div>
+      ` : `
+        <div class="risk-tile">
+          <div class="risk-tile-label">ABV pressure (10d)</div>
+          <div class="risk-tile-value" style="color:var(--text-faint)">—</div>
+          <div class="risk-tile-sub">unavailable</div>
+        </div>
+      `;
+
       capPanelHTML = `
         <section class="card cap-panel">
           <div class="card-header">
             <h2 class="card-title">Capitulation Watch</h2>
-            <span class="card-sub">Verdict · ${cv.verdict || 'NEUTRAL'} · score ${cv.score ?? 0} · ${(cv.firing || []).length}/3 firing</span>
+            <span class="card-sub">Verdict · ${cv.verdict || 'NEUTRAL'} · score ${cv.score ?? 0} · ${(cv.firing || []).length}/4 firing</span>
           </div>
-          <div class="risk-grid risk-grid-3">
+          <div class="risk-grid">
             ${vixHTML}
             ${cpcHTML}
             ${breadthHTML}
+            ${abvHTML}
           </div>
         </section>
       `;
