@@ -106,6 +106,9 @@ async function generateRecap(ctx) {
     if (capitulation.breadth) {
       lines.push(`Sector breadth: ${capitulation.breadth.below}/${capitulation.breadth.total} sectors below 20DMA (${capitulation.breadth.signal})`);
     }
+    if (capitulation.abv) {
+      lines.push(`ABV pressure (10d up/down vol): ${capitulation.abv.sma10} (${capitulation.abv.signal})`);
+    }
     if (capitulation.verdict.reasons.length) {
       lines.push(`Firing: ${capitulation.verdict.reasons.join('; ')}`);
     }
