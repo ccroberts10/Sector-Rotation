@@ -153,6 +153,7 @@ async function fetchHistory(symbol, days = 100) {
   return bars.map((b) => ({
     date: b.t.slice(0, 10),
     close: parseFloat(b.c),
+    volume: parseFloat(b.v) || 0,
   }));
 }
 
